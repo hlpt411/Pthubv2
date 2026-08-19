@@ -49,6 +49,7 @@ do
   end
 
   BringConnections = {}
+  _B = true -- Bring Mobs bật sẵn (gom quái hoạt động ngay khi load)
   BossList = {}
   MaterialList = {}
   NPCList = {}
@@ -349,15 +350,24 @@ IsRaidMob = function(mob)
     if mob.Parent and tostring(mob.Parent):lower():find("_worldorigin") then return true end
     return false
 end
+BoostSimulationRadius = function(radius)
+    local p = game.Players.LocalPlayer
+    local r = radius or getgenv().BringRadius or 3000
+    pcall(function() p.SimulationRadius = r end)
+    pcall(function() if sethiddenproperty then sethiddenproperty(p, "SimulationRadius", r) end end)
+    pcall(function() if set_hidden_property then set_hidden_property(p, "SimulationRadius", r) end end)
+end
+
 BringEnemy = function(Mon)
     if not _B then return end
-    if not Mon then 
-        -- Tự động tìm mob nếu không có Mon
-        local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+
+    local char = plr.Character
+    if not Mon then
+        -- Tự động tìm mob gần nhất (bỏ qua raid mob nếu _G.SkipRaidMobs bật)
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
-        
         local closestDist = math.huge
-        for _, enemy in ipairs(workspace.Enemies:GetChildren()) do
+        for _, enemy in pairs(workspace.Enemies:GetChildren()) do
             local hum = enemy:FindFirstChildOfClass("Humanoid")
             local root = enemy:FindFirstChild("HumanoidRootPart")
             if hum and root and hum.Health > 0 and not (_G.SkipRaidMobs and IsRaidMob(enemy)) then
@@ -370,72 +380,80 @@ BringEnemy = function(Mon)
         end
         if not Mon then return end
     end
-    
-    local AreaMob = false
-    
-    local function Mobs(enemy)
-        local hum = enemy:FindFirstChildOfClass("Humanoid")
-        local root = enemy:FindFirstChild("HumanoidRootPart")
-        return hum and root and hum.Health > 0, root, hum
-    end
 
-    local function Network(part)
-        if isnetworkowner then
-            return isnetworkowner(part)
-        end
-        return part.ReceiveAge == 0 and not part.Anchored and part.Velocity.Magnitude > 0
-    end
-    
-    pcall(function()
-        -- Tăng simulation radius
-        if sethiddenproperty then 
-            sethiddenproperty(plr, "SimulationRadius", math.huge)
-        end
-        
-        local targetPos = Mon.HumanoidRootPart.Position
-        
-        for _, v in ipairs(workspace.Enemies:GetChildren()) do
-            if v ~= Mon then
-                local alive, root, hum = Mobs(v)
-                if alive and v.Name == Mon.Name then
-                    local distance = (root.Position - targetPos).Magnitude
-                    if distance <= 3000 then
-                        -- Tạo BodyVelocity để giữ mob
-                        local bv = root:FindFirstChild("BodyVelocity")
-                        if not bv then
-                            bv = Instance.new("BodyVelocity")
-                            bv.Name = "BodyVelocity"
-                            bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-                            bv.Velocity = Vector3.zero
-                            bv.Parent = root
-                        end
-                        
-                        if distance <= 10 then
-                            AreaMob = true
-                        end
-                        
-                        -- Kéo mob lại nếu là network owner và chưa ở gần
-                        if not AreaMob and Network(root) then
-                            root.CFrame = CFrame.new(targetPos)
-                        end
-                        
-                        -- Tắt va chạm và ngăn di chuyển
-                        root.CanCollide = false
-                        hum.WalkSpeed = 0
-                        hum.JumpPower = 0
+    -- Chiếm quyền network owner mỗi lần gọi để mob xa nằm trong tầm kiểm soát
+    BoostSimulationRadius()
+
+    local monRoot = Mon:FindFirstChild("HumanoidRootPart")
+    if not monRoot then return end
+    local targetCF = monRoot.CFrame
+    local targetPos = monRoot.Position
+    local mobName = Mon.Name
+    local BRING_RANGE = getgenv().BringRange or 3000
+
+    for _, v in pairs(workspace.Enemies:GetChildren()) do
+        if v.Name == mobName then
+            local root = v:FindFirstChild("HumanoidRootPart")
+            local hum = v:FindFirstChildOfClass("Humanoid")
+            if root and hum and hum.Health > 0 then
+                local distance = (root.Position - targetPos).Magnitude
+                if distance <= BRING_RANGE then
+                    -- Kéo mob về vị trí mob đang farm (chỉ hiệu lực khi là network owner)
+                    if distance > 5 then
+                        pcall(function()
+                            root.CFrame = targetCF
+                        end)
                     end
+                    -- Đóng băng mob: tắt va chạm, ngăn di chuyển
+                    root.CanCollide = false
+                    hum.WalkSpeed = 0
+                    hum.JumpPower = 0
                 end
             end
         end
-        
-        -- Xử lý mob chính
-        if Mon and Mon:FindFirstChild("HumanoidRootPart") then
-            Mon.HumanoidRootPart.CanCollide = false
-            Mon.Humanoid.WalkSpeed = 0
-            Mon.Humanoid.JumpPower = 0
-        end
-    end)
+    end
 end
+
+-- Trả trạng thái bình thường khi tắt Bring Mobs
+ReleaseBringMobs = function()
+    for _, v in pairs(workspace.Enemies:GetChildren()) do
+        pcall(function()
+            local root = v:FindFirstChild("HumanoidRootPart")
+            local hum = v:FindFirstChildOfClass("Humanoid")
+            if root then
+                local bv = root:FindFirstChild("BodyVelocity")
+                if bv then bv:Destroy() end
+                root.CanCollide = true
+            end
+            if hum then
+                hum.WalkSpeed = 16
+                hum.JumpPower = 50
+            end
+        end)
+    end
+end
+
+-- Vòng lặp gom quái liên tục: tìm mob đang farm (có attribute "Locked")
+-- hoặc mob gần nhất, rồi kéo đồng loại về. Chạy lại mỗi 0.25s.
+task.spawn(function()
+    while task.wait(0.25) do
+        if _B then
+            pcall(function()
+                BoostSimulationRadius()
+                local target = nil
+                for _, v in pairs(workspace.Enemies:GetChildren()) do
+                    local hum = v:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 and v:GetAttribute("Locked") then
+                        target = v
+                        break
+                    end
+                end
+                BringEnemy(target)
+            end)
+        end
+    end
+end)
+
 Useskills = function(weapon, skill)
   if weapon == "Melee" then
     weaponSc("Melee")
@@ -4726,6 +4744,7 @@ Description = "",
 Default = true,
 Callback = function(Value)
   _B = Value
+  if not Value then ReleaseBringMobs() end
 end})
 Tabs.Settings:AddToggle({
     Name = "Auto Hop Server with time",
