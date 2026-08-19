@@ -11455,19 +11455,60 @@ spawn(function()
 end)
 
 
-local PlrList = {}   
-for _, v in pairs(game:GetService("Players"):GetChildren()) do
-    table.insert(PlrList, v.Name)
+-- Auto-refresh player list: cập nhật dropdown khi có player vào / rời server
+local PlrList = {}
+local lastPlrSig = ""
+
+local function RefreshPlayerDropdown()
+    local newList = {}
+    for _, v in pairs(Players:GetPlayers()) do
+        table.insert(newList, v.Name)
+    end
+    table.sort(newList)
+    local sigStr = table.concat(newList, ",")
+    if sigStr ~= lastPlrSig then
+        lastPlrSig = sigStr
+        PlrList = newList
+        -- Giữ lựa chọn nếu player vẫn còn trong server, ngược lại xoá
+        local keepSel = _G.PlayersList and Players:FindFirstChild(_G.PlayersList)
+        if not keepSel then
+            _G.PlayersList = nil
+            pcall(function() getgenv().PlayersList = nil end)
+        end
+        pcall(function()
+            __plrDropdown:Refresh(PlrList)
+            if keepSel then
+                __plrDropdown:Set(keepSel.Name)
+            else
+                __plrDropdown:Set("")
+            end
+        end)
+    end
 end
 
-Tabs.Combat:AddDropdown({
+local __plrDropdown = Tabs.Combat:AddDropdown({
     Name = "Select Players",
     Description = "",
     Options = PlrList,
     Callback = function(Value)
         _G.PlayersList = Value
+        pcall(function() getgenv().PlayersList = Value end) -- cho aimbot "Aim Player" đọc được
     end
 })
+
+-- Hook sự kiện vào / rời server + vòng lặp dự phòng
+pcall(function()
+    Players.PlayerAdded:Connect(RefreshPlayerDropdown)
+    Players.PlayerRemoving:Connect(RefreshPlayerDropdown)
+end)
+task.spawn(function()
+    while task.wait(0.5) do
+        pcall(RefreshPlayerDropdown)
+    end
+end)
+
+pcall(RefreshPlayerDropdown) -- fill danh sách ngay lần đầu
+
 
 Tabs.Combat:AddToggle({
     Name = "Teleport To Select Players",
