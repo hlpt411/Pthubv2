@@ -12207,9 +12207,12 @@ Callback = function()
 end})
 
 Tabs.Travel:AddSection("Travel - NPCs")
--- Điền danh sách NPC + tự refresh (NPC có thể load sau khi UI dựng xong)
+-- Teleport tới NPC: bọc toàn bộ trong pcall để nút LUÔN được tạo,
+-- kể cả khi thư viện GUI (bản cũ / executor chặn) lỗi ở bước dựng section.
 local __npcDropdown  -- khai báo trước hàm để closure bắt đúng upvalue
 local npcSig = ""
+local npcBtn
+
 local function RefreshNPCDropdown()
     pcall(function()
         if not replicated or not replicated:FindFirstChild("NPCs") then return end
@@ -12228,62 +12231,111 @@ local function RefreshNPCDropdown()
         end
     end)
 end
-__npcDropdown = Tabs.Travel:AddDropdown({
-Name = "Select NPCs",
-Options = NPCList,
-Callback = function(Value)
-  NPClist = Value
-end})
--- Nút teleport 1 lần tới NPC đã chọn
-Tabs.Travel:AddButton({
-Name = "Teleport to NPC",
-Description = "Tween tới NPC đã chọn ngay lập tức",
-Callback = function()
-  pcall(function()
-    if not NPClist or NPClist == "" then
-      Window:Notify({Title = "PT HUB", Content = "Chọn NPC trước khi teleport", Duration = 2})
-      return
-    end
-    local found = false
-    for _, v in pairs(replicated.NPCs:GetChildren()) do
-      if v.Name == NPClist then
-        local root = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
-        if root then _tp(root.CFrame) else _tp(v:GetPivot()) end
-        found = true
-        break
-      end
-    end
-    if not found then
-      Window:Notify({Title = "PT HUB", Content = "Không tìm thấy NPC: " .. tostring(NPClist), Duration = 2})
-    end
-  end)
-end})
-GoNPCs = Tabs.Travel:AddToggle({
-Name = "Auto Tween to NPC", 
-Description = "", 
-Default = false,
-Callback = function(Value)
-  _G.TPNpc = Value
-end})
-spawn(function()
-  while wait(Sec) do
-    if _G.TPNpc then
-      pcall(function()
-        for __, v in pairs(replicated.NPCs:GetChildren()) do
-          if v.Name == NPClist then
-            local root = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
-            if root then _tp(root.CFrame) else _tp(v:GetPivot()) end
-          end
+
+local function BuildNPCSection()
+    __npcDropdown = Tabs.Travel:AddDropdown({
+        Name = "Select NPCs",
+        Options = NPCList,
+        Callback = function(Value)
+            NPClist = Value
         end
-      end)
+    })
+
+    -- Nút teleport 1 lần tới NPC đã chọn (có icon cho nổi bật)
+    npcBtn = Tabs.Travel:AddButton({
+        Name = "Teleport to NPC",
+        Description = "Tween tới NPC đã chọn ngay lập tức",
+        Icon = "solar/compass-bold",
+        Callback = function()
+            pcall(function()
+                if not NPClist or NPClist == "" then
+                    Window:Notify({Title = "PT HUB", Content = "Chọn NPC trước khi teleport", Duration = 2})
+                    return
+                end
+                local found = false
+                for _, v in pairs(replicated.NPCs:GetChildren()) do
+                    if v.Name == NPClist then
+                        local root = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+                        local cf = root and root.CFrame or v:GetPivot()
+                        if _tp then _tp(cf) end
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    Window:Notify({Title = "PT HUB", Content = "Không tìm thấy NPC: " .. tostring(NPClist), Duration = 2})
+                end
+            end)
+        end,
+    })
+
+    -- Nút refresh danh sách NPC thủ công
+    Tabs.Travel:AddButton({
+        Name = "Refresh NPCs",
+        Description = "Cập nhật lại danh sách NPC",
+        Icon = "solar/refresh-bold",
+        Callback = function()
+            RefreshNPCDropdown()
+            Window:Notify({Title = "PT HUB", Content = "Đã refresh danh sách NPC", Duration = 2})
+        end,
+    })
+
+    GoNPCs = Tabs.Travel:AddToggle({
+        Name = "Auto Tween to NPC",
+        Description = "",
+        Default = false,
+        Callback = function(Value)
+            _G.TPNpc = Value
+        end,
+    })
+end
+
+-- Dựng section an toàn; nếu lỗi vẫn tạo nút teleport ở cấp tab (fallback)
+local okBuild = pcall(BuildNPCSection)
+if not okBuild then
+    pcall(function()
+        npcBtn = Tabs.Travel:AddButton({
+            Name = "Teleport to NPC",
+            Description = "Tween tới NPC đã chọn",
+            Callback = function()
+                pcall(function()
+                    if not NPClist or NPClist == "" then return end
+                    for _, v in pairs(replicated.NPCs:GetChildren()) do
+                        if v.Name == NPClist then
+                            local root = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+                            local cf = root and root.CFrame or v:GetPivot()
+                            if _tp then _tp(cf) end
+                            break
+                        end
+                    end
+                end)
+            end,
+        })
+    end)
+end
+
+-- Vòng lặp auto tween tới NPC đã chọn (giữ nguyên)
+spawn(function()
+    while wait(Sec) do
+        if _G.TPNpc then
+            pcall(function()
+                for __, v in pairs(replicated.NPCs:GetChildren()) do
+                    if v.Name == NPClist then
+                        local root = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+                        local cf = root and root.CFrame or v:GetPivot()
+                        if _tp then _tp(cf) end
+                    end
+                end
+            end)
+        end
     end
-  end
 end)
+
 RefreshNPCDropdown() -- fill danh sách lần đầu
 task.spawn(function()
-  while task.wait(3) do
-    RefreshNPCDropdown()
-  end
+    while task.wait(3) do
+        RefreshNPCDropdown()
+    end
 end)
 
 Tabs.Shop:AddSection("Shop Options")
