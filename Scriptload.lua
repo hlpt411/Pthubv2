@@ -1,10 +1,10 @@
--- Maru VIP V4: self-contained UI, complete controls, and staged workers.
+-- Maru VIP V5: immediate tab population, deferred engine setup, and self-contained UI.
 local __env = (getgenv and getgenv()) or _G
-if __env.__MARU_VIP_SELF_CONTAINED_V4_RUNNING then
-    warn("Maru VIP V4 is already running; duplicate execution blocked.")
+if __env.__MARU_VIP_V5_RUNNING then
+    warn("Maru VIP V5 is already running; duplicate execution blocked.")
     return
 end
-__env.__MARU_VIP_SELF_CONTAINED_V4_RUNNING = true
+__env.__MARU_VIP_V5_RUNNING = true
 
 -- Remove stale UI left by an older run before constructing this window.
 if __env.Fluent and type(__env.Fluent.Destroy) == "function" then
@@ -72,7 +72,7 @@ if getgenv().Team == "Pirates" then
 elseif getgenv().Team == "Marines" then
     game:GetService("ReplicatedStorage").Remotes.CommF_:InvokeServer("SetTeam", "Marines")
 end
-wait(4)
+task.wait(0.5)
 ------------------------------------------------------------------------------------------------------------------------------
 local Fluent = (function()
     local Players = game:GetService("Players")
@@ -85,7 +85,8 @@ local Fluent = (function()
         Options = {},
         Window = nil,
         GUI = nil,
-        Unloaded = false
+        Unloaded = false,
+        ControlCount = 0
     }
 
     local COLORS = {
@@ -150,6 +151,7 @@ local Fluent = (function()
     end
 
     local function makeBaseElement(tab, height)
+        Library.ControlCount = Library.ControlCount + 1
         local frame = create("Frame", {
             Name = "Element",
             Size = UDim2.new(1, -12, 0, height),
@@ -232,6 +234,7 @@ local Fluent = (function()
     TabMethods.__index = TabMethods
 
     function TabMethods:AddSection(title)
+        Library.ControlCount = Library.ControlCount + 1
         local label = create("TextLabel", {
             Name = "Section",
             Size = UDim2.new(1, -12, 0, 30),
@@ -609,18 +612,8 @@ local Fluent = (function()
             ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
             DisplayOrder = 900
         })
-        local parent = CoreGui
-        local ok = pcall(function()
-            gui.Parent = parent
-        end)
-        if not ok or not gui.Parent then
-            gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-        end
-        if protectgui then
-            pcall(protectgui, gui)
-        elseif syn and syn.protect_gui then
-            pcall(syn.protect_gui, gui)
-        end
+        -- PlayerGui is the most consistent render target across desktop and mobile executors.
+        gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
         local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 600)
         local requestedSize = config.Size or UDim2.fromOffset(620, 420)
@@ -839,11 +832,38 @@ local Tabs = {
     Shop = Window:AddTab({Title = "Shop", Icon = "shopping-bag"}),
     Misc = Window:AddTab({Title = "Misc", Icon = "menu"})
 }
-local __loadingParagraph = Tabs.Sever:AddParagraph({
-    Title = "Maru Hub",
-    Content = "Loading controls..."
-})
+local __tabLoadIndicators = {}
+for __tabName, __tab in pairs(Tabs) do
+    __tabLoadIndicators[__tabName] = __tab:AddParagraph({
+        Title = __tabName .. " — loading",
+        Content = "Preparing controls..."
+    })
+end
+local __loadingParagraph = __tabLoadIndicators.Sever
 Window:SelectTab(1)
+
+-- Runtime render check runs independently even while game-specific modules are loading.
+task.delay(1, function()
+    local ok, failure = pcall(function()
+        Window.Root.Visible = true
+        Window.Minimized = false
+        for _, __tab in pairs(Tabs) do
+            __tab.Button.Visible = true
+            __tab.Container.Size = UDim2.new(1, -Window.TabWidth - 1, 1, -46)
+            __tab.Container.ClipsDescendants = true
+            assert(__tab.Container:FindFirstChild("Element"), "tab content was not created")
+        end
+        Window:SelectTab(1)
+        __loadingParagraph:SetDesc("UI render test passed — loading full controls...")
+    end)
+    if not ok then
+        warn("Maru UI render repair: " .. tostring(failure))
+        if __loadingParagraph and __loadingParagraph.SetDesc then
+            __loadingParagraph:SetDesc("UI repair active: " .. tostring(failure))
+        end
+    end
+end)
+
 local Options = Fluent.Options
 do
     --Place Id Check
@@ -4795,163 +4815,7 @@ end)
         x = table.concat(tab)
         return x
     end
-    ---------------Fast
-    _G.FastAttack = false
-
-    if true then
-        local _ENV = (getgenv or getrenv or getfenv)()
-
-        local function SafeWaitForChild(parent, childName)
-            local success, result =
-                pcall(
-                function()
-                    return parent and (parent:FindFirstChild(childName) or parent:WaitForChild(childName, 0.25))
-                end
-            )
-            if not success or not result then
-                warn("noooooo: " .. childName)
-            end
-            return result
-        end
-
-        local function WaitChilds(path, ...)
-            local last = path
-            for _, child in {...} do
-                last = last:FindFirstChild(child) or SafeWaitForChild(last, child)
-                if not last then
-                    break
-                end
-            end
-            return last
-        end
-
-        local VirtualInputManager = game:GetService("VirtualInputManager")
-        local CollectionService = game:GetService("CollectionService")
-        local ReplicatedStorage = game:GetService("ReplicatedStorage")
-        local TeleportService = game:GetService("TeleportService")
-        local RunService = game:GetService("RunService")
-        local Players = game:GetService("Players")
-        local Player = Players.LocalPlayer
-
-        if not Player then
-            warn("Không tìm thấy người chơi cục bộ.")
-            return
-        end
-
-        local Remotes = SafeWaitForChild(ReplicatedStorage, "Remotes")
-        if not Remotes then
-            return
-        end
-
-        local Validator = SafeWaitForChild(Remotes, "Validator")
-        local CommF = SafeWaitForChild(Remotes, "CommF_")
-        local CommE = SafeWaitForChild(Remotes, "CommE")
-
-        local ChestModels = SafeWaitForChild(workspace, "ChestModels")
-        local WorldOrigin = SafeWaitForChild(workspace, "_WorldOrigin")
-        local Characters = SafeWaitForChild(workspace, "Characters")
-        local Enemies = SafeWaitForChild(workspace, "Enemies")
-        local Map = SafeWaitForChild(workspace, "Map")
-
-        local EnemySpawns = SafeWaitForChild(WorldOrigin, "EnemySpawns")
-        local Locations = SafeWaitForChild(WorldOrigin, "Locations")
-
-        local RenderStepped = RunService.RenderStepped
-        local Heartbeat = RunService.Heartbeat
-        local Stepped = RunService.Stepped
-
-        local Modules = SafeWaitForChild(ReplicatedStorage, "Modules")
-        local Net = SafeWaitForChild(Modules, "Net")
-
-        local sethiddenproperty = sethiddenproperty or function(...)
-                return ...
-            end
-        local setupvalue = setupvalue or (debug and debug.setupvalue)
-        local getupvalue = getupvalue or (debug and debug.getupvalue)
-
-        local Settings = {
-            AutoClick = true,
-            ClickDelay = 0
-        }
-
-        local Module = {}
-
-        Module.FastAttack =
-            (function()
-            if _ENV.rz_FastAttack then
-                return _ENV.rz_FastAttack
-            end
-
-            local FastAttack = {
-                Distance = 200000,
-                attackMobs = true,
-                attackPlayers = true,
-                Equipped = nil
-            }
-
-            local RegisterAttack = SafeWaitForChild(Net, "RE/RegisterAttack")
-            local RegisterHit = SafeWaitForChild(Net, "RE/RegisterHit")
-
-            local function IsAlive(character)
-                return character and character:FindFirstChild("Humanoid") and character.Humanoid.Health > 0
-            end
-
-            local function ProcessEnemies(OthersEnemies, Folder)
-                local BasePart = nil
-                for _, Enemy in Folder:GetChildren() do
-                    local Head = Enemy:FindFirstChild("Head")
-                    if Head and IsAlive(Enemy) and Player:DistanceFromCharacter(Head.Position) < FastAttack.Distance then
-                        if Enemy ~= Player.Character then
-                            table.insert(OthersEnemies, {Enemy, Head})
-                            BasePart = Head
-                        end
-                    end
-                end
-                return BasePart
-            end
-
-            function FastAttack:Attack(BasePart, OthersEnemies)
-                if not BasePart or #OthersEnemies == 0 then
-                    return
-                end
-                RegisterAttack:FireServer(Settings.ClickDelay or 0)
-                RegisterHit:FireServer(BasePart, OthersEnemies)
-            end
-
-            function FastAttack:AttackNearest()
-                local OthersEnemies = {}
-                local Part1 = ProcessEnemies(OthersEnemies, Enemies)
-                local Part2 = ProcessEnemies(OthersEnemies, Characters)
-                if #OthersEnemies > 0 then
-                    self:Attack(Part1 or Part2, OthersEnemies)
-                else
-                    task.wait(0.05)
-                end
-            end
-
-            function FastAttack:BladeHits()
-                local Equipped = IsAlive(Player.Character) and Player.Character:FindFirstChildOfClass("Tool")
-                if Equipped and Equipped.ToolTip ~= "Gun" then
-                    self:AttackNearest()
-                else
-                    wait(0,01)
-                end
-            end
-
-            __stableSpawn(
-                function()
-                    while task.wait(Settings.ClickDelay) do
-                        if Settings.AutoClick and _G.FastAttack then
-                            FastAttack:BladeHits()
-                        end
-                    end
-                end
-            )
-
-            _ENV.rz_FastAttack = FastAttack
-            return FastAttack
-        end)()
-    end
+    ---------------Fast engine deferred until UI is complete
 
     ---------------------------------------idk
     function to(v232)
@@ -15477,9 +15341,181 @@ __stableSpawn(function()
     end
 end);
 
+-- Deferred engine setup: UI is already fully populated if this optional block fails.
+local __fastEngineOk, __fastEngineError = xpcall(function()
+    ---------------Fast
+    _G.FastAttack = false
+
+    if true then
+        local _ENV = (getgenv or getrenv or getfenv)()
+
+        local function SafeWaitForChild(parent, childName)
+            local success, result =
+                pcall(
+                function()
+                    return parent and (parent:FindFirstChild(childName) or parent:WaitForChild(childName, 0.25))
+                end
+            )
+            if not success or not result then
+                warn("noooooo: " .. childName)
+            end
+            return result
+        end
+
+        local function WaitChilds(path, ...)
+            local last = path
+            for _, child in {...} do
+                last = last:FindFirstChild(child) or SafeWaitForChild(last, child)
+                if not last then
+                    break
+                end
+            end
+            return last
+        end
+
+        local VirtualInputManager = game:GetService("VirtualInputManager")
+        local CollectionService = game:GetService("CollectionService")
+        local ReplicatedStorage = game:GetService("ReplicatedStorage")
+        local TeleportService = game:GetService("TeleportService")
+        local RunService = game:GetService("RunService")
+        local Players = game:GetService("Players")
+        local Player = Players.LocalPlayer
+
+        if not Player then
+            warn("Không tìm thấy người chơi cục bộ.")
+            return
+        end
+
+        local Remotes = SafeWaitForChild(ReplicatedStorage, "Remotes")
+        if not Remotes then
+            return
+        end
+
+        local Validator = SafeWaitForChild(Remotes, "Validator")
+        local CommF = SafeWaitForChild(Remotes, "CommF_")
+        local CommE = SafeWaitForChild(Remotes, "CommE")
+
+        local ChestModels = SafeWaitForChild(workspace, "ChestModels")
+        local WorldOrigin = SafeWaitForChild(workspace, "_WorldOrigin")
+        local Characters = SafeWaitForChild(workspace, "Characters")
+        local Enemies = SafeWaitForChild(workspace, "Enemies")
+        local Map = SafeWaitForChild(workspace, "Map")
+
+        local EnemySpawns = SafeWaitForChild(WorldOrigin, "EnemySpawns")
+        local Locations = SafeWaitForChild(WorldOrigin, "Locations")
+
+        local RenderStepped = RunService.RenderStepped
+        local Heartbeat = RunService.Heartbeat
+        local Stepped = RunService.Stepped
+
+        local Modules = SafeWaitForChild(ReplicatedStorage, "Modules")
+        local Net = SafeWaitForChild(Modules, "Net")
+
+        local sethiddenproperty = sethiddenproperty or function(...)
+                return ...
+            end
+        local setupvalue = setupvalue or (debug and debug.setupvalue)
+        local getupvalue = getupvalue or (debug and debug.getupvalue)
+
+        local Settings = {
+            AutoClick = true,
+            ClickDelay = 0
+        }
+
+        local Module = {}
+
+        Module.FastAttack =
+            (function()
+            if _ENV.rz_FastAttack then
+                return _ENV.rz_FastAttack
+            end
+
+            local FastAttack = {
+                Distance = 200000,
+                attackMobs = true,
+                attackPlayers = true,
+                Equipped = nil
+            }
+
+            local RegisterAttack = SafeWaitForChild(Net, "RE/RegisterAttack")
+            local RegisterHit = SafeWaitForChild(Net, "RE/RegisterHit")
+
+            local function IsAlive(character)
+                return character and character:FindFirstChild("Humanoid") and character.Humanoid.Health > 0
+            end
+
+            local function ProcessEnemies(OthersEnemies, Folder)
+                local BasePart = nil
+                for _, Enemy in Folder:GetChildren() do
+                    local Head = Enemy:FindFirstChild("Head")
+                    if Head and IsAlive(Enemy) and Player:DistanceFromCharacter(Head.Position) < FastAttack.Distance then
+                        if Enemy ~= Player.Character then
+                            table.insert(OthersEnemies, {Enemy, Head})
+                            BasePart = Head
+                        end
+                    end
+                end
+                return BasePart
+            end
+
+            function FastAttack:Attack(BasePart, OthersEnemies)
+                if not BasePart or #OthersEnemies == 0 then
+                    return
+                end
+                RegisterAttack:FireServer(Settings.ClickDelay or 0)
+                RegisterHit:FireServer(BasePart, OthersEnemies)
+            end
+
+            function FastAttack:AttackNearest()
+                local OthersEnemies = {}
+                local Part1 = ProcessEnemies(OthersEnemies, Enemies)
+                local Part2 = ProcessEnemies(OthersEnemies, Characters)
+                if #OthersEnemies > 0 then
+                    self:Attack(Part1 or Part2, OthersEnemies)
+                else
+                    task.wait(0.05)
+                end
+            end
+
+            function FastAttack:BladeHits()
+                local Equipped = IsAlive(Player.Character) and Player.Character:FindFirstChildOfClass("Tool")
+                if Equipped and Equipped.ToolTip ~= "Gun" then
+                    self:AttackNearest()
+                else
+                    wait(0,01)
+                end
+            end
+
+            __stableSpawn(
+                function()
+                    while task.wait(Settings.ClickDelay) do
+                        if Settings.AutoClick and _G.FastAttack then
+                            FastAttack:BladeHits()
+                        end
+                    end
+                end
+            )
+
+            _ENV.rz_FastAttack = FastAttack
+            return FastAttack
+        end)()
+    end
+
+end, function(message)
+    return debug.traceback(tostring(message), 2)
+end)
+if not __fastEngineOk then
+    warn("Maru optional fast engine disabled: " .. tostring(__fastEngineError))
+end
+
 -- Finalize the populated window, then start background workers.
+for __tabName, __indicator in pairs(__tabLoadIndicators) do
+    if __indicator and __indicator.SetDesc then
+        __indicator:SetDesc("Ready — controls loaded")
+    end
+end
 if __loadingParagraph and __loadingParagraph.SetDesc then
-    __loadingParagraph:SetDesc("Ready — all controls loaded")
+    __loadingParagraph:SetDesc("Ready — " .. tostring(Fluent.ControlCount) .. " UI elements loaded")
 end
 Window:SelectTab(1)
 __startStableWorkers()
