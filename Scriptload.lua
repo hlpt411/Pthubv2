@@ -1,10 +1,25 @@
--- Maru Stable V2: crash-safe startup and staged worker scheduler.
+-- Maru Full Fixed V3: stable startup, complete UI, and staged workers.
 local __env = (getgenv and getgenv()) or _G
-if __env.__MARU_STABLE_V2_RUNNING then
-    warn("Maru Stable V2 is already running; duplicate execution blocked.")
+if __env.__MARU_FULL_FIXED_V3_RUNNING then
+    warn("Maru Full Fixed V3 is already running; duplicate execution blocked.")
     return
 end
-__env.__MARU_STABLE_V2_RUNNING = true
+__env.__MARU_FULL_FIXED_V3_RUNNING = true
+
+-- Remove stale UI left by an older run before constructing this window.
+if __env.Fluent and type(__env.Fluent.Destroy) == "function" then
+    pcall(function()
+        __env.Fluent:Destroy()
+    end)
+end
+local __cleanupPlayer = game:GetService("Players").LocalPlayer
+local __oldToggleGui = __cleanupPlayer and __cleanupPlayer:FindFirstChild("PlayerGui")
+if __oldToggleGui then
+    __oldToggleGui = __oldToggleGui:FindFirstChild("MaruMenuToggle")
+    if __oldToggleGui then
+        __oldToggleGui:Destroy()
+    end
+end
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -89,6 +104,11 @@ local Tabs = {
     Shop = Window:AddTab({Title = "Shop", Icon = "shopping-bag"}),
     Misc = Window:AddTab({Title = "Misc", Icon = "menu"})
 }
+local __loadingParagraph = Tabs.Sever:AddParagraph({
+    Title = "Maru Hub",
+    Content = "Loading controls..."
+})
+Window:SelectTab(1)
 local Options = Fluent.Options
 do
     --Place Id Check
@@ -112,43 +132,39 @@ do
         end
     )
 
--- Tạo ScreenGui
+-- Floating control for the actual Fluent window.
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "ImageButton"
+ScreenGui.Name = "MaruMenuToggle"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 1000
 ScreenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
 
--- Tạo Frame (Menu chính)
-local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 300, 0, 200)
-MainFrame.Position = UDim2.new(0.5, -150, 0.5, -100)
-MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-MainFrame.Visible = false
-MainFrame.Parent = ScreenGui
-
--- Bo góc cho menu
-local UICornerMain = Instance.new("UICorner")
-UICornerMain.CornerRadius = UDim.new(0, 20)
-UICornerMain.Parent = MainFrame
-
--- Tạo ImageButton (nút mở menu)
-local ToggleButton = Instance.new("ImageButton")
-ToggleButton.Size = UDim2.new(0, 60, 0, 60)
-ToggleButton.Position = UDim2.new(0, 20, 0, 20)
-ToggleButton.Image = "rbxassetid://113653485299271" -- đổi ID theo ý bạn
-ToggleButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Name = "Toggle"
+ToggleButton.Size = UDim2.fromOffset(54, 54)
+ToggleButton.Position = UDim2.fromOffset(18, 90)
+ToggleButton.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+ToggleButton.Text = "M"
+ToggleButton.TextColor3 = Color3.fromRGB(110, 220, 255)
+ToggleButton.TextSize = 24
+ToggleButton.Font = Enum.Font.GothamBold
+ToggleButton.AutoButtonColor = true
+ToggleButton.ZIndex = 20
 ToggleButton.Parent = ScreenGui
 
--- Bo góc cho nút
 local UICornerButton = Instance.new("UICorner")
 UICornerButton.CornerRadius = UDim.new(1, 0)
 UICornerButton.Parent = ToggleButton
+local UIStrokeButton = Instance.new("UIStroke")
+UIStrokeButton.Color = Color3.fromRGB(80, 180, 255)
+UIStrokeButton.Thickness = 2
+UIStrokeButton.Parent = ToggleButton
 
--- Bật / Tắt menu
 ToggleButton.MouseButton1Click:Connect(function()
-	MainFrame.Visible = not MainFrame.Visible
+    Window:Minimize()
 end)
 
-    if type(d) == "function" then task.defer(d) end
 
     First_Sea = false
     Second_Sea = false
@@ -164,14 +180,13 @@ end)
 
     ------------------------------------Notify
     local players = game:GetService("Players")
-    game:GetService("StarterGui"):SetCore(
-        "SendNotification",
-        {
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
             Title = "Maru Hub",
             Text = "Loaded Success",
             Duration = 10
-        }
-    )
+        })
+    end)
 
     ------------------------------------------------------------------------------------------------------------------------------------
     function FindQuest()
@@ -4046,16 +4061,16 @@ end)
         return x
     end
     ---------------Fast
-    _G.FastAttack = true
+    _G.FastAttack = false
 
-    if _G.FastAttack then
+    if true then
         local _ENV = (getgenv or getrenv or getfenv)()
 
         local function SafeWaitForChild(parent, childName)
             local success, result =
                 pcall(
                 function()
-                    return parent:WaitForChild(childName)
+                    return parent and (parent:FindFirstChild(childName) or parent:WaitForChild(childName, 0.25))
                 end
             )
             if not success or not result then
@@ -4191,7 +4206,7 @@ end)
             __stableSpawn(
                 function()
                     while task.wait(Settings.ClickDelay) do
-                        if Settings.AutoClick then
+                        if Settings.AutoClick and _G.FastAttack then
                             FastAttack:BladeHits()
                         end
                     end
@@ -4991,59 +5006,6 @@ end)
             end
         end
     )
-
-    local Mastery = Tabs.Main:AddSection("Mastery Farm")
-    local DropdownMastery =
-        Tabs.Main:AddDropdown(
-        "DropdownMastery",
-        {
-            Title = "Mastery Mode",
-            Values = {"Level", "Near Mobs"},
-            Multi = false,
-            Default = 1
-        }
-    )
-
-    DropdownMastery:SetValue("Level")
-
-    DropdownMastery:OnChanged(
-        function(Value)
-            TypeMastery = Value
-        end
-    )
-
-    local ToggleMasteryFruit =
-        Tabs.Main:AddToggle("ToggleMasteryFruit", {Title = "Auto BF Mastery [Not Work]", Default = false})
-    ToggleMasteryFruit:OnChanged(
-        function(Value)
-            AutoFarmMasDevilFruit = Value
-        end
-    )
-    Options.ToggleMasteryFruit:SetValue(false)
-
-    local SliderHealt =
-        Tabs.Main:AddSlider(
-        "SliderHealt",
-        {
-            Title = "Health (%) Mob",
-            Description = "",
-            Default = 25,
-            Min = 0,
-            Max = 100,
-            Rounding = 1,
-            Callback = function(Value)
-                KillPercent = Value
-            end
-        }
-    )
-
-    SliderHealt:OnChanged(
-        function(Value)
-            KillPercent = Value
-        end
-    )
-
-    SliderHealt:SetValue(25)
 
     local Mastery = Tabs.Main:AddSection("Mastery Farm")
     local DropdownMastery =
@@ -10849,7 +10811,7 @@ __stableSpawn(
 )
 
 local AutoHydraEnforcer =
-    Tabs.Volcanic:AddToggle("AutoEmber", {Title = "Attack Hydra Enforcer", Default = false})
+    Tabs.Volcanic:AddToggle("AutoHydraEnforcer", {Title = "Attack Hydra Enforcer", Default = false})
 AutoHydraEnforcer:OnChanged(
     function(Value)
         _G.AutoHydraEnforcer = Value
@@ -10909,7 +10871,7 @@ __stableSpawn(
 )
 
 local AutoVenomousAssailant =
-    Tabs.Volcanic:AddToggle("AutoEmber", {Title = "Attack Venomous Assailant", Default = false})
+    Tabs.Volcanic:AddToggle("AutoVenomousAssailant", {Title = "Attack Venomous Assailant", Default = false})
 AutoVenomousAssailant:OnChanged(
     function(Value)
         _G.AutoVenomousAssailant = Value
@@ -11987,13 +11949,13 @@ DropdownFruit:OnChanged(
     end
 )
 
-local ToggleFruit = Tabs.Fruit:AddToggle("ToggleFruit", {Title = "Auto Buy Fruit Sniper", Default = false})
+local ToggleFruit = Tabs.Fruit:AddToggle("FruitSniperToggle", {Title = "Auto Buy Fruit Sniper", Default = false})
 ToggleFruit:OnChanged(
     function(Value)
         _G.AutoBuyFruitSniper = Value
     end
 )
-Options.ToggleFruit:SetValue(false)
+Options.FruitSniperToggle:SetValue(false)
 __stableSpawn(
     function()
         pcall(
@@ -14519,7 +14481,7 @@ local v171 = Tabs.Volcanic:AddToggle("ToggleDefendVolcano", {
 v171:OnChanged(function(v401)
     _G.AutoDefendVolcano = v401;
 end);
-local v175 = Tabs.Volcanic:AddToggle("ToggleKillAura", {
+local v175 = Tabs.Volcanic:AddToggle("VolcanoKillAura", {
     Title = "Auto Kill Golems",
     Description = "",
     Default = false
@@ -14527,7 +14489,7 @@ local v175 = Tabs.Volcanic:AddToggle("ToggleKillAura", {
 v175:OnChanged(function(v413)
     KillAura = v413;
 end);
-Options.ToggleKillAura:SetValue(false);
+Options.VolcanoKillAura:SetValue(false);
 __stableSpawn(function()
     while task.wait(0.25) do
         if KillAura then
@@ -14642,7 +14604,7 @@ __stableSpawn(
 
 local FarmPri = Tabs.S:AddSection("Setting For Volcano Event")
 
-local v107 = Tabs.S:AddToggle("ToggleMelee", {
+local v107 = Tabs.S:AddToggle("VolcanoUseMelee", {
     Title = "Spam Skill Melle",
     Description = "",
     Default = false
@@ -14650,7 +14612,7 @@ local v107 = Tabs.S:AddToggle("ToggleMelee", {
 v107:OnChanged(function(v402)
     _G.UseMelee = v402;
 end);
-local v109 = Tabs.S:AddToggle("ToggleSword", {
+local v109 = Tabs.S:AddToggle("VolcanoUseSword", {
     Title = "Spam Skill Sword",
     Description = "",
     Default = false
@@ -14658,7 +14620,7 @@ local v109 = Tabs.S:AddToggle("ToggleSword", {
 v109:OnChanged(function(v403)
     _G.UseSword = v403;
 end);
-local v110 = Tabs.S:AddToggle("ToggleGun", {
+local v110 = Tabs.S:AddToggle("VolcanoUseGun", {
     Title = "Spam Skill Gun",
     Description = "",
     Default = false
@@ -14666,7 +14628,7 @@ local v110 = Tabs.S:AddToggle("ToggleGun", {
 v110:OnChanged(function(v404)
     _G.UseGun = v404;
 end);
-local v111 = Tabs.S:AddToggle("ToggleFruit", {
+local v111 = Tabs.S:AddToggle("VolcanoUseFruit", {
     Title = "Spam Skill Fruit",
     Description = "",
     Default = false
@@ -14780,5 +14742,9 @@ __stableSpawn(function()
     end
 end);
 
--- Start queued workers only after every control and callback has been created.
+-- Finalize the populated window, then start background workers.
+if __loadingParagraph and __loadingParagraph.SetDesc then
+    __loadingParagraph:SetDesc("Ready — all controls loaded")
+end
+Window:SelectTab(1)
 __startStableWorkers()
