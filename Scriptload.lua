@@ -666,12 +666,20 @@ end;
   return false
 end;
 UpdStFruit = function()
-  for z,x in next, plr.Backpack:GetChildren() do
-  StoreFruit = x:FindFirstChild("EatRemote", true)
-    if StoreFruit then
-      replicated.Remotes.CommF_:InvokeServer("StoreFruit",StoreFruit.Parent:GetAttribute("OriginalName"),
-      plr.Backpack:FindFirstChild(x.Name))
-    end
+  for _, x in pairs(plr.Backpack:GetChildren()) do
+    pcall(function()
+      if x:IsA("Tool") and x:FindFirstChild("EatRemote", true) then
+        -- Remote StoreFruit nhận TÊN trái cây dạng "Name-Name" (VD "Bomb-Bomb"),
+        -- không phải instance tool. Lấy từ attribute OriginalName, fallback tên tool.
+        local fruitName = x:GetAttribute("OriginalName")
+        if not fruitName or fruitName == "" then
+          local base = x.Name:gsub(" Fruit$", "")
+          fruitName = base .. "-" .. base
+        end
+        replicated.Remotes.CommF_:InvokeServer("StoreFruit", fruitName)
+        task.wait(0.1) -- tránh spam remote
+      end
+    end)
   end
 end
 collectFruits = function(Succes)
@@ -10720,7 +10728,35 @@ end})
 spawn(function()
   while wait(Sec) do
    	pcall(function()
-      if _G.Random_Auto then replicated.Remotes.CommF_:InvokeServer("Cousin","Buy") end 
+      if _G.Random_Auto then
+        -- Tìm dealer random fruit: Zioles (Sea 2/3) hoặc Cousin (Sea 1), bay tới rồi mua
+        local dealerRoot, dealerKey = nil, nil
+        pcall(function() -- quét NPC an toàn, không làm hỏng bước mua
+        for _, _v in pairs(replicated.NPCs:GetChildren()) do
+          local _n = _v.Name
+          if _n == "Zioles" or _n == "Cousin" or _n == "Blox Fruit Dealer Cousin" then
+            if _n == "Zioles" then
+              dealerRoot = _v:FindFirstChild("HumanoidRootPart"); dealerKey = _n; break
+            elseif not dealerKey then
+              dealerRoot = _v:FindFirstChild("HumanoidRootPart"); dealerKey = _n
+            end
+          end
+        end
+        end) -- kết thúc quét NPC an toàn
+        local _hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+        if dealerRoot and _hrp and (dealerRoot.Position - _hrp.Position).Magnitude > 40 then
+          _tp(dealerRoot.CFrame)
+          task.wait(0.3)
+        end
+        if dealerKey then
+          replicated.Remotes.CommF_:InvokeServer(dealerKey, "Buy")
+        else
+          if not replicated.Remotes.CommF_:InvokeServer("Zioles", "Buy") then
+            replicated.Remotes.CommF_:InvokeServer("Cousin", "Buy")
+          end
+        end
+      end 
+
     end)
   end
 end)
@@ -11458,6 +11494,7 @@ end)
 -- Auto-refresh player list: cập nhật dropdown khi có player vào / rời server
 local PlrList = {}
 local lastPlrSig = ""
+local __plrDropdown  -- khai báo TRƯỚC hàm để closure bắt đúng upvalue (fix dropdown rỗng)
 
 local function RefreshPlayerDropdown()
     local newList = {}
@@ -11475,18 +11512,18 @@ local function RefreshPlayerDropdown()
             _G.PlayersList = nil
             pcall(function() getgenv().PlayersList = nil end)
         end
-        pcall(function()
-            __plrDropdown:Refresh(PlrList)
-            if keepSel then
-                __plrDropdown:Set(keepSel.Name)
-            else
-                __plrDropdown:Set("")
-            end
-        end)
+        if __plrDropdown then
+            pcall(function()
+                __plrDropdown:Refresh(PlrList)
+                if keepSel then
+                    __plrDropdown:Set(keepSel.Name)
+                end
+            end)
+        end
     end
 end
 
-local __plrDropdown = Tabs.Combat:AddDropdown({
+__plrDropdown = Tabs.Combat:AddDropdown({
     Name = "Select Players",
     Description = "",
     Options = PlrList,
@@ -12170,12 +12207,56 @@ Callback = function()
 end})
 
 Tabs.Travel:AddSection("Travel - NPCs")
-for _, v in pairs(replicated.NPCs:GetChildren()) do table.insert(NPCList, v.Name)end
-NPCsPos = Tabs.Travel:AddDropdown({
+-- Điền danh sách NPC + tự refresh (NPC có thể load sau khi UI dựng xong)
+local __npcDropdown  -- khai báo trước hàm để closure bắt đúng upvalue
+local npcSig = ""
+local function RefreshNPCDropdown()
+    pcall(function()
+        if not replicated or not replicated:FindFirstChild("NPCs") then return end
+        local newList = {}
+        for _, v in pairs(replicated.NPCs:GetChildren()) do
+            table.insert(newList, v.Name)
+        end
+        table.sort(newList)
+        local sig = table.concat(newList, ",")
+        if sig ~= npcSig and #newList > 0 then
+            npcSig = sig
+            NPCList = newList
+            if __npcDropdown then
+                __npcDropdown:Refresh(NPCList)
+            end
+        end
+    end)
+end
+__npcDropdown = Tabs.Travel:AddDropdown({
 Name = "Select NPCs",
 Options = NPCList,
 Callback = function(Value)
   NPClist = Value
+end})
+-- Nút teleport 1 lần tới NPC đã chọn
+Tabs.Travel:AddButton({
+Name = "Teleport to NPC",
+Description = "Tween tới NPC đã chọn ngay lập tức",
+Callback = function()
+  pcall(function()
+    if not NPClist or NPClist == "" then
+      Window:Notify({Title = "PT HUB", Content = "Chọn NPC trước khi teleport", Duration = 2})
+      return
+    end
+    local found = false
+    for _, v in pairs(replicated.NPCs:GetChildren()) do
+      if v.Name == NPClist then
+        local root = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+        if root then _tp(root.CFrame) else _tp(v:GetPivot()) end
+        found = true
+        break
+      end
+    end
+    if not found then
+      Window:Notify({Title = "PT HUB", Content = "Không tìm thấy NPC: " .. tostring(NPClist), Duration = 2})
+    end
+  end)
 end})
 GoNPCs = Tabs.Travel:AddToggle({
 Name = "Auto Tween to NPC", 
@@ -12187,12 +12268,21 @@ end})
 spawn(function()
   while wait(Sec) do
     if _G.TPNpc then
-	 pcall(function()
-       for __, v in pairs(replicated.NPCs:GetChildren()) do
-       if v.Name == NPClist then _tp(v.HumanoidRootPart.CFrame) end
-       end                	   	   
-	 end)
+      pcall(function()
+        for __, v in pairs(replicated.NPCs:GetChildren()) do
+          if v.Name == NPClist then
+            local root = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+            if root then _tp(root.CFrame) else _tp(v:GetPivot()) end
+          end
+        end
+      end)
     end
+  end
+end)
+RefreshNPCDropdown() -- fill danh sách lần đầu
+task.spawn(function()
+  while task.wait(3) do
+    RefreshNPCDropdown()
   end
 end)
 
