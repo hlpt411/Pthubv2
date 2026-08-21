@@ -1934,10 +1934,10 @@ do
     return row
   end
 
-  local function RowLabel(row, text, width)
+  local function RowLabel(row, text, labelW)
     local lab = Instance.new("TextLabel", row)
-    lab.Size = UDim2.new(width and 0 or 1, width and width or -40, 1, 0)
-    if width then lab.Position = UDim2.new(0, 14, 0, 0) end
+    lab.Size = UDim2.new(0, labelW, 1, 0)
+    lab.Position = UDim2.new(0, 14, 0, 0)
     lab.BackgroundTransparency = 1
     lab.Text = tostring(text)
     lab.TextColor3 = T.text
@@ -1946,6 +1946,34 @@ do
     lab.TextXAlignment = Enum.TextXAlignment.Left
     lab.TextTruncate = Enum.TextTruncate.AtEnd
     return lab
+  end
+
+  -- chiều rộng label thích ứng với bề rộng nội dung thật (FIX: màn nhỏ)
+  local function LayoutWidths(self)
+    local cw = self.ContentW or 520
+    local lw = math.max(76, math.min(200, math.floor(cw * 0.52) - 10))
+    return cw, lw
+  end
+
+  -- FIX: màn nhỏ -> hàng 2 dòng (label trên, control đầy đủ bên dưới)
+  local function RowLayout(self, rowH, ctlH)
+    local _cw, _lw = LayoutWidths(self)
+    local compactRow = _cw < 430
+    local labW, labH, ctlW, ctlX, ctlY
+    if compactRow then
+      labW = _cw - 24
+      labH = 15
+      ctlW = _cw - 16
+      ctlX = 8
+      ctlY = rowH + 4
+    else
+      labW = _lw
+      labH = rowH
+      ctlW = _cw - _lw - 24
+      ctlX = _lw + 12
+      ctlY = (rowH - ctlH) / 2
+    end
+    return { compact = compactRow, cw = _cw, lw = _lw, labW = labW, labH = labH, ctlW = ctlW, ctlX = ctlX, ctlY = ctlY, ctlH = ctlH }
   end
 
   local function IsOn(val)
@@ -2072,10 +2100,17 @@ do
     local cb = o.Callback or function() end
     local value = default
     local row = MakeRow(self.Scroll, 40)
-    local lab = RowLabel(row, o.Name or o.Title or "Slider", 190)
+    local L = RowLayout(self, 40, 24)
+    local lab = RowLabel(row, o.Name or o.Title or "Slider", L.labW)
+    if L.compact then
+      row.Size = UDim2.new(1, 0, 0, 72)
+      lab.Size = UDim2.new(1, -24, 0, 15)
+      lab.Position = UDim2.new(0, 12, 0, 6)
+      lab.TextSize = 12
+    end
     local valLbl = Instance.new("TextLabel", row)
-    valLbl.Size = UDim2.new(0, 60, 1, 0)
-    valLbl.Position = UDim2.new(0, 200, 0, 0)
+    valLbl.Size = UDim2.new(0, 56, 0, 14)
+    valLbl.Position = UDim2.new(0, L.ctlX + L.ctlW - 60, 0, L.ctlY + 1)
     valLbl.BackgroundTransparency = 1
     valLbl.Text = tostring(default)
     valLbl.TextColor3 = LerpC(T.blue, T.purple, 0.6)
@@ -2085,8 +2120,8 @@ do
     -- slider
     local sld = Instance.new("TextButton", row)
     sld.Name = "Slider"
-    sld.Size = UDim2.new(1, -280, 0, 14)
-    sld.Position = UDim2.new(1, -270, 0.5, -7)
+    sld.Size = UDim2.new(0, L.ctlW - 64, 0, 14)
+    sld.Position = UDim2.new(0, L.ctlX, 0, L.ctlY + 5)
     sld.BackgroundColor3 = T.track
     sld.Text = ""
     sld.AutoButtonColor = false
@@ -2157,10 +2192,17 @@ do
     local cb = o.Callback or function() end
     local current = o.Default
     local row = MakeRow(self.Scroll, 36)
-    local lab = RowLabel(row, o.Name or o.Title or "Dropdown", 190)
+    local L = RowLayout(self, 36, 26)
+    local lab = RowLabel(row, o.Name or o.Title or "Dropdown", L.labW)
+    if L.compact then
+      row.Size = UDim2.new(1, 0, 0, 66)
+      lab.Size = UDim2.new(1, -24, 0, 15)
+      lab.Position = UDim2.new(0, 12, 0, 6)
+      lab.TextSize = 12
+    end
     local btn = Instance.new("TextButton", row)
-    btn.Size = UDim2.new(1, -280, 0, 26)
-    btn.Position = UDim2.new(1, -270, 0.5, -13)
+    btn.Size = UDim2.new(0, L.ctlW, 0, 26)
+    btn.Position = UDim2.new(0, L.ctlX, 0, L.ctlY)
     btn.BackgroundColor3 = T.track
     btn.Text = ""
     btn.AutoButtonColor = false
@@ -2284,10 +2326,17 @@ do
   function Container:AddTextBox(o)
     local cb = o.Callback or function() end
     local row = MakeRow(self.Scroll, 36)
-    local lab = RowLabel(row, o.Name or o.Title or "Input", 190)
+    local L = RowLayout(self, 36, 26)
+    local lab = RowLabel(row, o.Name or o.Title or "Input", L.labW)
+    if L.compact then
+      row.Size = UDim2.new(1, 0, 0, 66)
+      lab.Size = UDim2.new(1, -24, 0, 15)
+      lab.Position = UDim2.new(0, 12, 0, 6)
+      lab.TextSize = 12
+    end
     local box = Instance.new("TextBox", row)
-    box.Size = UDim2.new(1, -280, 0, 26)
-    box.Position = UDim2.new(1, -270, 0.5, -13)
+    box.Size = UDim2.new(0, L.ctlW, 0, 26)
+    box.Position = UDim2.new(0, L.ctlX, 0, L.ctlY)
     box.BackgroundColor3 = T.track
     box.BackgroundTransparency = 0.2
     box.BorderSizePixel = 0
@@ -2401,7 +2450,7 @@ do
     lab.TextXAlignment = Enum.TextXAlignment.Left
     lab.TextTruncate = Enum.TextTruncate.AtEnd
     -- section tiếp tục chèn vào cùng scroll
-    return setmetatable({ Scroll = self.Scroll }, Container)
+    return setmetatable({ Scroll = self.Scroll, ContentW = self.ContentW }, Container)
   end
 
   -- ============ WINDOW ============
@@ -2410,17 +2459,18 @@ do
 
   local TabWrap = {}
   TabWrap.__index = TabWrap
-  function TabWrap:AddSection(n) return setmetatable({ Scroll = self._scroll }, Container):AddSection(n) end
-  function TabWrap:AddParagraph(t, d) return setmetatable({ Scroll = self._scroll }, Container):AddParagraph(t, d) end
-  function TabWrap:AddButton(o) return setmetatable({ Scroll = self._scroll }, Container):AddButton(o) end
-  function TabWrap:AddToggle(o) return setmetatable({ Scroll = self._scroll }, Container):AddToggle(o) end
-  function TabWrap:AddSlider(o) return setmetatable({ Scroll = self._scroll }, Container):AddSlider(o) end
-  function TabWrap:AddDropdown(o) return setmetatable({ Scroll = self._scroll }, Container):AddDropdown(o) end
-  function TabWrap:AddTextBox(o) return setmetatable({ Scroll = self._scroll }, Container):AddTextBox(o) end
-  function TabWrap:AddDiscordInvite(o) return setmetatable({ Scroll = self._scroll }, Container):AddDiscordInvite(o) end
-  function TabWrap:AddDivider() return setmetatable({ Scroll = self._scroll }, Container):AddDivider() end
-  function TabWrap:AddInput(o) return setmetatable({ Scroll = self._scroll }, Container):AddInput(o) end
-  function TabWrap:AddLabel(t) return setmetatable({ Scroll = self._scroll }, Container):AddLabel(t) end
+  local function tabCtx(self) return setmetatable({ Scroll = self._scroll, ContentW = self.ContentW }, Container) end
+  function TabWrap:AddSection(n) return tabCtx(self):AddSection(n) end
+  function TabWrap:AddParagraph(t, d) return tabCtx(self):AddParagraph(t, d) end
+  function TabWrap:AddButton(o) return tabCtx(self):AddButton(o) end
+  function TabWrap:AddToggle(o) return tabCtx(self):AddToggle(o) end
+  function TabWrap:AddSlider(o) return tabCtx(self):AddSlider(o) end
+  function TabWrap:AddDropdown(o) return tabCtx(self):AddDropdown(o) end
+  function TabWrap:AddTextBox(o) return tabCtx(self):AddTextBox(o) end
+  function TabWrap:AddDiscordInvite(o) return tabCtx(self):AddDiscordInvite(o) end
+  function TabWrap:AddDivider() return tabCtx(self):AddDivider() end
+  function TabWrap:AddInput(o) return tabCtx(self):AddInput(o) end
+  function TabWrap:AddLabel(t) return tabCtx(self):AddLabel(t) end
 
   local ICON_MAP = {
     ["Tab Info And Status"] = "ℹ",
@@ -2476,10 +2526,22 @@ do
     scroll.ScrollBarThickness = 4
     scroll.ScrollBarImageColor3 = LerpC(T.blue, T.purple, 0.5)
     scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
     local layout = Instance.new("UIListLayout", scroll)
     layout.Padding = UDim.new(0, 6)
     layout.SortOrder = Enum.SortOrder.LayoutOrder
+    -- FIX: đồng bộ CanvasSize thủ công — nội dung LUÔN hiện kể cả khi
+    -- AutomaticCanvasSize không hoạt động trên executor
+    task.spawn(function()
+      while scroll and scroll.Parent do
+        pcall(function()
+          local s = layout.AbsoluteContentSize
+          if s and s.Y and s.Y > 0 then
+            scroll.CanvasSize = UDim2.new(0, math.max(0, s.X or 0), 0, s.Y + 12)
+          end
+        end)
+        task.wait(0.12)
+      end
+    end)
 
     -- nút nav
     local navBtn = Instance.new("TextButton", self.NavList)
@@ -2537,7 +2599,7 @@ do
     end
 
     -- khai báo TRƯỚC khi dùng trong closure (Luau: forward local = nil)
-    local wrapped = setmetatable({ _scroll = scroll, _holder = holder, _nav = navBtn, Title = title, _t = { Scroll = scroll } }, TabWrap)
+    local wrapped = setmetatable({ _scroll = scroll, _holder = holder, _nav = navBtn, Title = title, _t = { Scroll = scroll }, ContentW = self_w.ContentW or 520 }, TabWrap)
     table.insert(self_w.Tabs, wrapped)
 
     navBtn.MouseButton1Click:Connect(function()
@@ -2590,8 +2652,9 @@ do
 
   function WindowWrap:Show()
     pcall(function()
+      if not self.Main or not self.Main.Parent then return end
+      self._open = true
       self.Main.Visible = true
-      self.Floating.Visible = false
       SetBlur(true)
       TweenService:Create(self.Main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 }):Play()
     end)
@@ -2599,7 +2662,8 @@ do
 
   function WindowWrap:Hide()
     pcall(function()
-      self.Floating.Visible = true
+      if not self.Main then return end
+      self._open = false
       TweenService:Create(self.Main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { GroupTransparency = 1 }):Play()
       task.delay(0.2, function()
         if self.Main then self.Main.Visible = false end
@@ -2632,39 +2696,40 @@ do
     fg.DisplayOrder = 2147483646
     local ok = pcall(function() fg.Parent = (gethui and gethui()) or CoreGui end)
     if not ok or not fg.Parent then pcall(function() fg.Parent = LP:WaitForChild("PlayerGui") end) end
-    local pill = Instance.new("TextButton", fg)
-    pill.Name = "Pill"
-    pill.Size = UDim2.new(0, 118, 0, 38)
-    pill.Position = UDim2.new(0.5, -59, 0.92, -19)
-    pill.BackgroundColor3 = T.panel2
-    pill.BackgroundTransparency = 0.08
-    pill.Text = ""
-    pill.AutoButtonColor = false
-    pill.BorderSizePixel = 0
-    RoundRect(pill, 19)
-    Stroke(pill, 0.35, LerpC(T.blue, T.purple, 0.5))
-    local dot = MakeGradient(pill, T.blue, T.purple, 1, 8)
-    dot.Size = UDim2.new(0, 12, 0, 12)
-    dot.Position = UDim2.new(0, 12, 0.5, -6)
-    RoundRect(dot, 6)
-    local txt = Instance.new("TextLabel", pill)
-    txt.Size = UDim2.new(1, -36, 1, 0)
-    txt.Position = UDim2.new(0, 30, 0, 0)
-    txt.BackgroundTransparency = 1
-    txt.Text = "PT HUB"
-    txt.TextColor3 = T.text
-    txt.Font = Enum.Font.GothamBold
-    txt.TextSize = 13
-    txt.TextXAlignment = Enum.TextXAlignment.Left
-    pill.Visible = false
-    pill.MouseButton1Click:Connect(function()
-      self:Show()
-    end)
-    self.Floating = pill
-    -- kéo nút nổi
-    local function dragStart() end
+    -- FIX: nút nhỏ HÌNH VUÔNG luôn hiển thị để bật/tắt menu
+    local btn = Instance.new("TextButton", fg)
+    btn.Name = "ToggleBtn"
+    btn.Size = UDim2.new(0, 46, 0, 46)
+    btn.Position = UDim2.new(1, -58, 1, -58)
+    btn.BackgroundColor3 = T.panel2
+    btn.BackgroundTransparency = 0.06
+    btn.Text = ""
+    btn.AutoButtonColor = false
+    btn.BorderSizePixel = 0
+    RoundRect(btn, 14)
+    Stroke(btn, 0.4, LerpC(T.blue, T.purple, 0.5))
+    local bg = MakeGradient(btn, T.blue, T.purple, 0.18, 10)
+    bg.Size = UDim2.new(1, 0, 1, 0)
+    RoundRect(bg, 14)
+    local ic = Instance.new("TextLabel", btn)
+    ic.Size = UDim2.new(1, 0, 1, 0)
+    ic.BackgroundTransparency = 1
+    ic.Text = "⚡"
+    ic.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ic.Font = Enum.Font.GothamBold
+    ic.TextSize = 20
+    btn.Visible = true
+    local function ToggleMenu()
+      if self._open then
+        self:Hide()
+      else
+        self:Show()
+      end
+    end
+    btn.MouseButton1Click:Connect(ToggleMenu)
+    -- kéo thả nút
     local dragging, dStart = false
-    pill.InputBegan:Connect(function(input)
+    btn.InputBegan:Connect(function(input)
       if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         dStart = input.Position
@@ -2679,20 +2744,37 @@ do
       if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - dStart
         dStart = input.Position
-        pill.Position = pill.Position + UDim2.new(0, delta.X, 0, delta.Y)
+        btn.Position = btn.Position + UDim2.new(0, delta.X, 0, delta.Y)
       end
     end)
+    -- hover phóng to nhẹ
+    local us = Instance.new("UIScale", btn)
+    us.Scale = 1
+    btn.MouseEnter:Connect(function()
+      TweenService:Create(us, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1.08 }):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+      TweenService:Create(us, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+    end)
+    self.Floating = btn
     self._floatGui = fg
   end
 
   -- ============ MAKE WINDOW ============
   function PtLib_MakeWindow(o)
     local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
-    local winW, winH = 780, 560
-    local useScale = viewport.X < 900 or viewport.Y < 700
-    if useScale then
-      winW, winH = 0, 0
+    -- FIX: cửa sổ tự co theo màn hình — không bao giờ che hết màn (mobile/Delta)
+    local compact = viewport.X < 900 or viewport.Y < 700
+    local navW = compact and 140 or 186
+    local winW = math.min(780, viewport.X - 24)
+    local winH = math.min(560, viewport.Y - 90)
+    if compact then
+      winW = math.max(320, math.min(440, winW))
+      winH = math.max(400, math.min(560, winH))
     end
+    winW = math.max(320, math.min(winW, viewport.X - 16))
+    winH = math.max(380, math.min(winH, viewport.Y - 70))
+    local contentW = winW - navW - 32
 
     local w = setmetatable({ Tabs = {}, ActiveTab = nil, Main = nil, NavList = nil, ContentArea = nil }, WindowWrap)
 
@@ -2711,14 +2793,8 @@ do
     main.BorderSizePixel = 0
     RoundRect(main, 16)
     Stroke(main, 0.16)
-    if useScale then
-      main.Size = UDim2.fromScale(0.94, 0.9)
-      main.AnchorPoint = Vector2.new(0.5, 0.5)
-      main.Position = UDim2.fromScale(0.5, 0.5)
-    else
-      main.Size = UDim2.fromOffset(winW, winH)
-      main.Position = UDim2.fromOffset((viewport.X - winW) / 2, (viewport.Y - winH) / 2)
-    end
+    main.Size = UDim2.fromOffset(winW, winH)
+    main.Position = UDim2.fromOffset(math.max(8, (viewport.X - winW) / 2), math.max(8, (viewport.Y - winH) / 2))
 
     -- ===== title bar =====
     local titleBar = Instance.new("Frame", main)
@@ -2740,8 +2816,10 @@ do
     t1.TextSize = 17
     t1.TextXAlignment = Enum.TextXAlignment.Left
     local t2 = Instance.new("TextLabel", titleBar)
-    t2.Size = UDim2.new(0, 220, 0, 16)
+    t2.Size = UDim2.new(0, math.max(0, winW - 300), 0, 16)
     t2.Position = UDim2.new(0, 20, 0, 22)
+    t2.TextTruncate = Enum.TextTruncate.AtEnd
+    if winW < 380 then t2.Visible = false end
     t2.BackgroundTransparency = 1
     t2.Text = "Blox Fruits  •  Maru-style Neo UI"
     t2.TextColor3 = T.sub
@@ -2809,7 +2887,7 @@ do
     -- ===== nav (trái) =====
     local nav = Instance.new("Frame", main)
     nav.Name = "Nav"
-    nav.Size = UDim2.new(0, 186, 1, -64)
+    nav.Size = UDim2.new(0, navW, 1, -64)
     nav.Position = UDim2.new(0, 12, 0, 54)
     nav.BackgroundColor3 = T.panel2
     nav.BackgroundTransparency = 0.10
@@ -2831,14 +2909,17 @@ do
     -- ===== content (phải) =====
     local content = Instance.new("Frame", main)
     content.Name = "Content"
-    content.Size = UDim2.new(1, -216, 1, -70)
-    content.Position = UDim2.new(0, 206, 0, 56)
+    content.Size = UDim2.new(1, -(navW + 30), 1, -70)
+    content.Position = UDim2.new(0, navW + 20, 0, 56)
     content.BackgroundTransparency = 1
 
     w.Main = main
     w.NavList = navScroll
     w.ContentArea = content
     w.ScreenGui = sg
+    w.ContentW = contentW
+    w.Compact = compact
+    w._open = true   -- menu mở sẵn khi khởi động
 
     -- entrance
     main.GroupTransparency = 1
@@ -2856,8 +2937,7 @@ do
 end
 
 -- ================= PT HUB window bootstrap =================
--- ================= PT HUB window bootstrap =================
--- Giao dien PT HUB Neo (Maru-style) — duoc dung boi engine UI tu chua.
+-- Giao dien PT HUB Neo (Maru-style) — engine UI tu chua, tuong thich moi executor.
 -- Toan bo tinh nang phia duoi cau vao cung _G flag thong qua wrapper.
 local Window = PtLib:MakeWindow({
     Title = "PT HUB",
