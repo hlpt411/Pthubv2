@@ -1934,10 +1934,12 @@ do
     return row
   end
 
-  local function RowLabel(row, text, labelW)
+  -- Bố cục 100% theo tỉ lệ (Scale) — không phụ thuộc pixel/ViewportSize.
+  -- Label chiếm 42% hàng, control chiếm phần còn lại. Chạy đúng trên mọi màn hình.
+  local function RowLabel(row, text, frac)
     local lab = Instance.new("TextLabel", row)
-    lab.Size = UDim2.new(0, labelW, 1, 0)
-    lab.Position = UDim2.new(0, 14, 0, 0)
+    lab.Size = UDim2.new(frac or 0.42, -12, 1, 0)
+    lab.Position = UDim2.new(0, 12, 0, 0)
     lab.BackgroundTransparency = 1
     lab.Text = tostring(text)
     lab.TextColor3 = T.text
@@ -1946,34 +1948,6 @@ do
     lab.TextXAlignment = Enum.TextXAlignment.Left
     lab.TextTruncate = Enum.TextTruncate.AtEnd
     return lab
-  end
-
-  -- chiều rộng label thích ứng với bề rộng nội dung thật (FIX: màn nhỏ)
-  local function LayoutWidths(self)
-    local cw = self.ContentW or 520
-    local lw = math.max(76, math.min(200, math.floor(cw * 0.52) - 10))
-    return cw, lw
-  end
-
-  -- FIX: màn nhỏ -> hàng 2 dòng (label trên, control đầy đủ bên dưới)
-  local function RowLayout(self, rowH, ctlH)
-    local _cw, _lw = LayoutWidths(self)
-    local compactRow = _cw < 430
-    local labW, labH, ctlW, ctlX, ctlY
-    if compactRow then
-      labW = _cw - 24
-      labH = 15
-      ctlW = _cw - 16
-      ctlX = 8
-      ctlY = rowH + 4
-    else
-      labW = _lw
-      labH = rowH
-      ctlW = _cw - _lw - 24
-      ctlX = _lw + 12
-      ctlY = (rowH - ctlH) / 2
-    end
-    return { compact = compactRow, cw = _cw, lw = _lw, labW = labW, labH = labH, ctlW = ctlW, ctlX = ctlX, ctlY = ctlY, ctlH = ctlH }
   end
 
   local function IsOn(val)
@@ -2100,17 +2074,10 @@ do
     local cb = o.Callback or function() end
     local value = default
     local row = MakeRow(self.Scroll, 40)
-    local L = RowLayout(self, 40, 24)
-    local lab = RowLabel(row, o.Name or o.Title or "Slider", L.labW)
-    if L.compact then
-      row.Size = UDim2.new(1, 0, 0, 72)
-      lab.Size = UDim2.new(1, -24, 0, 15)
-      lab.Position = UDim2.new(0, 12, 0, 6)
-      lab.TextSize = 12
-    end
+    local lab = RowLabel(row, o.Name or o.Title or "Slider", 0.36)
     local valLbl = Instance.new("TextLabel", row)
-    valLbl.Size = UDim2.new(0, 56, 0, 14)
-    valLbl.Position = UDim2.new(0, L.ctlX + L.ctlW - 60, 0, L.ctlY + 1)
+    valLbl.Size = UDim2.new(0, 52, 0, 14)
+    valLbl.Position = UDim2.new(1, -60, 0.5, -7)
     valLbl.BackgroundTransparency = 1
     valLbl.Text = tostring(default)
     valLbl.TextColor3 = LerpC(T.blue, T.purple, 0.6)
@@ -2120,8 +2087,8 @@ do
     -- slider
     local sld = Instance.new("TextButton", row)
     sld.Name = "Slider"
-    sld.Size = UDim2.new(0, L.ctlW - 64, 0, 14)
-    sld.Position = UDim2.new(0, L.ctlX, 0, L.ctlY + 5)
+    sld.Size = UDim2.new(0.64, -72, 0, 14)
+    sld.Position = UDim2.new(0.36, 6, 0.5, -7)
     sld.BackgroundColor3 = T.track
     sld.Text = ""
     sld.AutoButtonColor = false
@@ -2192,17 +2159,10 @@ do
     local cb = o.Callback or function() end
     local current = o.Default
     local row = MakeRow(self.Scroll, 36)
-    local L = RowLayout(self, 36, 26)
-    local lab = RowLabel(row, o.Name or o.Title or "Dropdown", L.labW)
-    if L.compact then
-      row.Size = UDim2.new(1, 0, 0, 66)
-      lab.Size = UDim2.new(1, -24, 0, 15)
-      lab.Position = UDim2.new(0, 12, 0, 6)
-      lab.TextSize = 12
-    end
+    local lab = RowLabel(row, o.Name or o.Title or "Dropdown", 0.42)
     local btn = Instance.new("TextButton", row)
-    btn.Size = UDim2.new(0, L.ctlW, 0, 26)
-    btn.Position = UDim2.new(0, L.ctlX, 0, L.ctlY)
+    btn.Size = UDim2.new(0.58, -16, 0, 26)
+    btn.Position = UDim2.new(0.42, 8, 0.5, -13)
     btn.BackgroundColor3 = T.track
     btn.Text = ""
     btn.AutoButtonColor = false
@@ -2326,17 +2286,10 @@ do
   function Container:AddTextBox(o)
     local cb = o.Callback or function() end
     local row = MakeRow(self.Scroll, 36)
-    local L = RowLayout(self, 36, 26)
-    local lab = RowLabel(row, o.Name or o.Title or "Input", L.labW)
-    if L.compact then
-      row.Size = UDim2.new(1, 0, 0, 66)
-      lab.Size = UDim2.new(1, -24, 0, 15)
-      lab.Position = UDim2.new(0, 12, 0, 6)
-      lab.TextSize = 12
-    end
+    local lab = RowLabel(row, o.Name or o.Title or "Input", 0.42)
     local box = Instance.new("TextBox", row)
-    box.Size = UDim2.new(0, L.ctlW, 0, 26)
-    box.Position = UDim2.new(0, L.ctlX, 0, L.ctlY)
+    box.Size = UDim2.new(0.58, -16, 0, 26)
+    box.Position = UDim2.new(0.42, 8, 0.5, -13)
     box.BackgroundColor3 = T.track
     box.BackgroundTransparency = 0.2
     box.BorderSizePixel = 0
@@ -2693,31 +2646,32 @@ do
     fg.Name = "PTHUB_Float"
     fg.ResetOnSpawn = false
     fg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    fg.DisplayOrder = 2147483646
+    fg.DisplayOrder = 2147483647
     local ok = pcall(function() fg.Parent = (gethui and gethui()) or CoreGui end)
     if not ok or not fg.Parent then pcall(function() fg.Parent = LP:WaitForChild("PlayerGui") end) end
-    -- FIX: nút nhỏ HÌNH VUÔNG luôn hiển thị để bật/tắt menu
+    -- FIX (lần 2): nút vuông 56px, trên cùng mọi thứ, LUÔN hiển thị
     local btn = Instance.new("TextButton", fg)
     btn.Name = "ToggleBtn"
-    btn.Size = UDim2.new(0, 46, 0, 46)
-    btn.Position = UDim2.new(1, -58, 1, -58)
+    btn.Size = UDim2.new(0, 56, 0, 56)
+    btn.Position = UDim2.new(1, -70, 1, -70)
     btn.BackgroundColor3 = T.panel2
-    btn.BackgroundTransparency = 0.06
+    btn.BackgroundTransparency = 0.05
     btn.Text = ""
     btn.AutoButtonColor = false
     btn.BorderSizePixel = 0
-    RoundRect(btn, 14)
-    Stroke(btn, 0.4, LerpC(T.blue, T.purple, 0.5))
-    local bg = MakeGradient(btn, T.blue, T.purple, 0.18, 10)
+    btn.ZIndex = 6
+    RoundRect(btn, 16)
+    Stroke(btn, 0.5, LerpC(T.blue, T.purple, 0.6))
+    local bg = MakeGradient(btn, T.blue, T.purple, 0.22, 10)
     bg.Size = UDim2.new(1, 0, 1, 0)
-    RoundRect(bg, 14)
+    RoundRect(bg, 16)
     local ic = Instance.new("TextLabel", btn)
     ic.Size = UDim2.new(1, 0, 1, 0)
     ic.BackgroundTransparency = 1
-    ic.Text = "⚡"
+    ic.Text = "☰"
     ic.TextColor3 = Color3.fromRGB(255, 255, 255)
     ic.Font = Enum.Font.GothamBold
-    ic.TextSize = 20
+    ic.TextSize = 26
     btn.Visible = true
     local function ToggleMenu()
       if self._open then
@@ -2762,21 +2716,22 @@ do
 
   -- ============ MAKE WINDOW ============
   function PtLib_MakeWindow(o)
-    local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
-    -- FIX: cửa sổ tự co theo màn hình — không bao giờ che hết màn (mobile/Delta)
-    local compact = viewport.X < 900 or viewport.Y < 700
-    local navW = compact and 140 or 186
-    local winW = math.min(780, viewport.X - 24)
-    local winH = math.min(560, viewport.Y - 90)
-    if compact then
-      winW = math.max(320, math.min(440, winW))
-      winH = math.max(400, math.min(560, winH))
-    end
-    winW = math.max(320, math.min(winW, viewport.X - 16))
-    winH = math.max(380, math.min(winH, viewport.Y - 70))
-    local contentW = winW - navW - 32
+    local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1000, 800)
+    local vw, vh = viewport.X, viewport.Y
+    -- FIX (lần 2): bố cục 100% theo tỉ lệ (Scale) — MIỄN NHIỄM với mọi giá trị
+    -- ViewportSize sai/lệch trên thiết bị thật. Cửa sổ luôn <= 86% rộng, <= 82% cao,
+    -- tối đa 780x560, canh giữa tuyệt đối. Không bao giờ che hết màn hình.
+    local compact = (vw < 900) or (vh < 700)
+    local navScale = compact and 0.31 or 0.24
+    local winScaleX = math.min(0.86, 780 / math.max(1, vw))
+    local winScaleY = math.min(0.82, 560 / math.max(1, vh))
+    local winW = winScaleX * vw
+    local contentW = winW * (1 - navScale - 0.055)
 
     local w = setmetatable({ Tabs = {}, ActiveTab = nil, Main = nil, NavList = nil, ContentArea = nil }, WindowWrap)
+    -- FIX: nút bật/mở menu dựng ĐẦU TIÊN, độc lập — dù phần sau có lỗi gì
+    -- nút vẫn tồn tại và hoạt động.
+    pcall(function() w:BuildFloatingButton() end)
 
     local sg = Instance.new("ScreenGui")
     sg.Name = "PTHUB_Neo"
@@ -2793,8 +2748,9 @@ do
     main.BorderSizePixel = 0
     RoundRect(main, 16)
     Stroke(main, 0.16)
-    main.Size = UDim2.fromOffset(winW, winH)
-    main.Position = UDim2.fromOffset(math.max(8, (viewport.X - winW) / 2), math.max(8, (viewport.Y - winH) / 2))
+    main.Size = UDim2.new(winScaleX, 0, winScaleY, 0)
+    main.AnchorPoint = Vector2.new(0.5, 0.5)
+    main.Position = UDim2.new(0.5, 0, 0.5, 0)
 
     -- ===== title bar =====
     local titleBar = Instance.new("Frame", main)
@@ -2887,8 +2843,8 @@ do
     -- ===== nav (trái) =====
     local nav = Instance.new("Frame", main)
     nav.Name = "Nav"
-    nav.Size = UDim2.new(0, navW, 1, -64)
-    nav.Position = UDim2.new(0, 12, 0, 54)
+    nav.Size = UDim2.new(navScale, 0, 1, -64)
+    nav.Position = UDim2.new(0, 10, 0, 54)
     nav.BackgroundColor3 = T.panel2
     nav.BackgroundTransparency = 0.10
     nav.BorderSizePixel = 0
@@ -2909,8 +2865,8 @@ do
     -- ===== content (phải) =====
     local content = Instance.new("Frame", main)
     content.Name = "Content"
-    content.Size = UDim2.new(1, -(navW + 30), 1, -70)
-    content.Position = UDim2.new(0, navW + 20, 0, 56)
+    content.Size = UDim2.new(1 - navScale - 0.055, 0, 1, -70)
+    content.Position = UDim2.new(navScale + 0.045, 0, 0, 56)
     content.BackgroundTransparency = 1
 
     w.Main = main
@@ -2939,6 +2895,8 @@ end
 -- ================= PT HUB window bootstrap =================
 -- Giao dien PT HUB Neo (Maru-style) — engine UI tu chua, tuong thich moi executor.
 -- Toan bo tinh nang phia duoi cau vao cung _G flag thong qua wrapper.
+-- ================= PT HUB window bootstrap =================
+-- Giao dien PT HUB Neo v3 — layout 100% Scale, miễn nhiễm ViewportSize.
 local Window = PtLib:MakeWindow({
     Title = "PT HUB",
     SubTitle = "IS BACK",
