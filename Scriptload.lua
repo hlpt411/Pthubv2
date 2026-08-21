@@ -1666,1658 +1666,1199 @@ QuestNeta = function()
         [6] = GetQuestPoint()            
     }
 end
+-- ============================================================
+-- PT HUB NEO UI — giao diện Maru-style (glassmorphism, neon).
+-- Tự chứa 100%: KHÔNG tải thư viện ngoài, không cần mạng →
+-- luôn hiện menu trên mọi executor (Delta, Solara, Xeno...).
+-- Engine + wrapper giữ nguyên API mà phần dựng tính năng cần:
+--   Window:MakeTab/Notify/SetTheme/Show/Hide/SelectTab/NewMinimizer
+--   Tab:AddSection/AddParagraph/AddButton/AddToggle/AddSlider/
+--       AddDropdown/AddTextBox/AddDiscordInvite/AddDivider/AddInput/AddLabel
+-- ============================================================
+local UserInputService = game:GetService("UserInputService")
 
--- =====================================================================
--- PT HUB GUI
--- Exposes the API surface used by this script:
---   PtLib:MakeWindow -> creates the window
---   Window:MakeTab / :NewMinimizer / :CreateMobileMinimizer / :Notify
---   Tab:AddSection / AddToggle / AddButton / AddSlider / AddDropdown /
---       AddParagraph / AddTextBox / AddDiscordInvite
---   Toggle:Set(bool)        Paragraph:SetDesc(str)
--- =====================================================================
--- FIX: this was `loadstring(game:HttpGet(url))()` with zero error handling.
--- That single line is the other big "script cannot be executed" report:
---  * github.com/.../releases/download/... 302-redirects to
---    objects.githubusercontent.com, and several mobile executors' HttpGet
---    does not follow redirects -> returns "" or an HTML error page
---  * loadstring on that garbage returns nil + an error string, and calling
---    nil throws "attempt to call a nil value" at top level -> whole script dead
--- Now: try mirrors, and report WHICH step failed instead of dying silently.
-local Fluent
 do
-  local sources = {
-    "https://raw.githubusercontent.com/StyearX/Fluent-modded/main/FluentPro.lua",
-    "https://cdn.jsdelivr.net/gh/StyearX/Fluent-modded@main/FluentPro.lua",
-    "https://raw.githubusercontent.com/StyearX/Fluent-modded/master/FluentPro.lua",
-    "https://github.com/StyearX/Fluent-modded/releases/download/1.5.5/FluentPro",
-  }
-  local CachePath = "PT HUB/Fluent.lua"
-  -- uu tien ban cache tren dia: lan chay sau KHONG can mang (quan trong voi Delta)
-  if isfile and isfile(CachePath) and not Fluent then
-    local okC, bodyC = pcall(readfile, CachePath)
-    if okC and type(bodyC) == "string" and #bodyC > 1000 then
-      local chunkC, errC = loadstring(bodyC)
-      if chunkC then
-        local ranC, libC = pcall(chunkC)
-        if ranC and type(libC) == "table" then Fluent = libC end
-      end
-    end
-  end
-  local httpget = (syn and syn.request) and function(u)
-      local r = syn.request({ Url = u, Method = "GET" })
-      return r and r.Body
-    end or function(u) return game:HttpGet(u) end
-
-  local lastErr
-  for _, url in ipairs(sources) do
-    local ok, body = pcall(httpget, url)
-    if ok and type(body) == "string" and #body > 1000 and not body:find("^%s*<") then
-      local chunk, err = loadstring(body)
-      if chunk then
-        local ran, lib = pcall(chunk)
-        if ran and type(lib) == "table" then
-          Fluent = lib
-          -- cache xuong dia de lan sau khong can tai lai
-          if writefile then pcall(writefile, CachePath, body) end
-          break
-        end
-        lastErr = "library errored while loading: " .. tostring(lib)
-      else
-        lastErr = "compile failed: " .. tostring(err)
-      end
-    else
-      lastErr = "download failed / not a script: " .. tostring(ok and body and #body)
-    end
-  end
-
-  if not Fluent then
-    -- KHONG error() o day: tren nhieu executor error bi hook thanh no-op, script
-    -- chay tiep voi Fluent=nil roi chet o CreateWindow -> "menu khong hien, khong bao gi".
-    -- Thay vao do: canh bao + de phan sau dung FALLBACK MENU.
-    local msg = "[PT HUB] UI library could not load (" .. tostring(lastErr) .. "). Using fallback menu."
-    warn(msg)
-    pcall(function()
-      game:GetService("StarterGui"):SetCore("SendNotification",
-        { Title = "PT HUB", Text = "UI library blocked - fallback menu enabled.", Duration = 8 })
-    end)
-  end
-end
-
--- ============================================================
--- PT HUB FALLBACK MENU — hiện menu NGAY CẢ KHI không tải được Fluent.
--- Dựng bằng Instance thuần (không mạng, không thư viện) nên chạy được
--- trên mọi executor (Delta, Solara, Xeno, ...). Toggle/button/dropdown
--- cắm thẳng vào cùng _G flag như bản Fluent, kèm đủ loop tính năng.
--- ============================================================
-BuildFallbackUI = function()
-  local ENV = (getgenv and getgenv()) or _G
+  local TweenService = game:GetService("TweenService")
   local Players = game:GetService("Players")
   local LP = Players.LocalPlayer
-  local UIS = game:GetService("UserInputService")
+  local Lighting = game:GetService("Lighting")
+  local CoreGui = game:GetService("CoreGui")
   local StarterGui = game:GetService("StarterGui")
-  local TeleportS = game:GetService("TeleportService")
-  local CollectionS = game:GetService("CollectionService")
-  local HttpS = game:GetService("HttpService")
 
-  local function Notify(text)
+  local function NotifyCore(text)
     pcall(function()
       StarterGui:SetCore("SendNotification", { Title = "PT HUB", Text = tostring(text), Duration = 4 })
     end)
   end
 
-  -- ================= engine Random Fruit (bản vá, tự chứa) =================
-  local RandomFruitCooldown = 0
-  local function FindRandomDealer()
-    local found = { zioles = nil, other = nil }
-    local function scan(container)
-      if not container then return end
-      for _, v in ipairs(container:GetChildren()) do
-        local n = v.Name
-        if n == "Zioles" or n == "Cousin" or n == "Blox Fruit Dealer Cousin" then
-          local root = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
-          if root then
-            if n == "Zioles" and not found.zioles then
-              found.zioles = { root = root, name = n }
-            elseif n ~= "Zioles" and not found.other then
-              found.other = { root = root, name = n }
-            end
-          end
-        end
-      end
-    end
-    pcall(function() scan(workspace:FindFirstChild("NPCs")) end)
-    pcall(function() scan(replicated:FindFirstChild("NPCs")) end)
-    if not found.zioles and not found.other then
-      pcall(function()
-        for _, v in ipairs(workspace:GetDescendants()) do
-          if v:IsA("Model") and (v.Name == "Zioles" or v.Name == "Cousin" or v.Name == "Blox Fruit Dealer Cousin") then
-            local root = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
-            if root then
-              if v.Name == "Zioles" and not found.zioles then
-                found.zioles = { root = root, name = v.Name }
-              elseif v.Name ~= "Zioles" and not found.other then
-                found.other = { root = root, name = v.Name }
-              end
-            end
-          end
-        end
-      end)
-    end
-    if found.zioles then return found.zioles end
-    return found.other
+  -- ============ THEME ============
+  local T = {
+    bg        = Color3.fromRGB(9, 11, 20),
+    panel     = Color3.fromRGB(17, 21, 36),
+    panel2    = Color3.fromRGB(12, 15, 27),
+    stroke    = Color3.fromRGB(255, 255, 255),
+    strokeA   = 0.12,
+    text      = Color3.fromRGB(238, 243, 255),
+    sub       = Color3.fromRGB(148, 158, 184),
+    blue      = Color3.fromRGB(64, 156, 255),
+    purple    = Color3.fromRGB(163, 94, 255),
+    cyan      = Color3.fromRGB(66, 220, 255),
+    green     = Color3.fromRGB(58, 214, 150),
+    red       = Color3.fromRGB(255, 105, 120),
+    track     = Color3.fromRGB(28, 32, 52),
+    rowA      = 0.045,
+    hoverA    = 0.09,
+    radius    = 14,
+  }
+
+  local function LerpC(a, b, t)
+    return Color3.fromRGB(
+      math.floor(a.R + (b.R - a.R) * t),
+      math.floor(a.G + (b.G - a.G) * t),
+      math.floor(a.B + (b.B - a.B) * t)
+    )
   end
 
-  local function GetDealerFallbackCFrame()
-    if World1 then
-      return CFrame.new(-1618.91016, 36.2737, 148.587)
-    elseif World2 then
-      return CFrame.new(-382.917, 73.289, 291.402)
-    elseif World3 then
-      return CFrame.new(-12455.3, 375.2, -7552.7)
-    end
-    return nil
+  local function RoundRect(frame, radius)
+    local c = Instance.new("UICorner", frame)
+    c.CornerRadius = UDim.new(0, radius or T.radius)
   end
 
-  local function GoToRandomDealer(cf)
-    if not cf then return false end
-    local char = plr.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-    local target = typeof(cf) == "CFrame" and cf or CFrame.new(cf)
+  local function Stroke(frame, alpha, color)
+    local s = Instance.new("UIStroke", frame)
+    s.Thickness = 1
+    s.Transparency = 1 - (alpha or T.strokeA)
+    s.Color = color or T.stroke
+    return s
+  end
+
+  -- gradient dọc (trên->dưới) bằng nhiều lát mỏng
+  local function MakeGradient(parent, c1, c2, alpha, slices)
+    local g = Instance.new("Frame", parent)
+    g.BackgroundTransparency = 1
+    g.ZIndex = parent.ZIndex or 1
+    local n = slices or 12
+    for i = 1, n do
+      local s = Instance.new("Frame", g)
+      s.Size = UDim2.new(1, 0, 1 / n, 0)
+      s.Position = UDim2.new(0, 0, (i - 1) / n, 0)
+      s.BackgroundColor3 = LerpC(c1, c2, (i - 1) / (n - 1))
+      s.BackgroundTransparency = 1 - alpha
+      s.BorderSizePixel = 0
+    end
+    return g
+  end
+
+  -- ============ TOAST ============
+  local Toasts = { gui = nil, items = {} }
+  local function GetToastGui()
+    if Toasts.gui and Toasts.gui.Parent then return Toasts.gui end
+    local g = Instance.new("ScreenGui")
+    g.Name = "PTHUB_Toasts"
+    g.ResetOnSpawn = false
+    g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    g.DisplayOrder = 2147483647
+    local ok = pcall(function() g.Parent = (gethui and gethui()) or CoreGui end)
+    if not ok or not g.Parent then
+      pcall(function() g.Parent = LP:WaitForChild("PlayerGui") end)
+    end
+    Toasts.gui = g
+    return g
+  end
+
+  local function PushToast(title, content, duration)
     pcall(function()
-      for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then part.CanCollide = false end
-      end
-    end)
-    hrp.CFrame = target * CFrame.new(0, 3, 0)
-    local start = os.clock()
-    repeat
-      task.wait(0.15)
-      local h = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-      if h and (h.Position - target.Position).Magnitude <= 30 then
-        return true
-      end
-    until (os.clock() - start) > 8
-    pcall(function()
-      local h = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-      if h then h.CFrame = target * CFrame.new(0, 3, 0) end
-    end)
-    return false
-  end
-
-  local function CountHeldFruits()
-    local n = 0
-    for _, t in ipairs(plr.Backpack:GetChildren()) do
-      if t:IsA("Tool") and (t:FindFirstChild("EatRemote", true) or tostring(t.Name):find("Fruit")) then
-        n = n + 1
-      end
-    end
-    local char = plr.Character
-    if char then
-      for _, t in ipairs(char:GetChildren()) do
-        if t:IsA("Tool") and (t:FindFirstChild("EatRemote", true) or tostring(t.Name):find("Fruit")) then
-          n = n + 1
+      local g = GetToastGui()
+      local W = 300
+      local margin = 14
+      local item = Instance.new("Frame", g)
+      item.Name = "Toast"
+      item.Size = UDim2.new(0, W, 0, 66)
+      item.Position = UDim2.new(1, 20, 1, -80)
+      item.BackgroundColor3 = T.panel2
+      item.BackgroundTransparency = 0.08
+      item.BorderSizePixel = 0
+      RoundRect(item, 12)
+      local st = Stroke(item, 0.5, LerpC(T.blue, T.purple, 0.5))
+      st.Thickness = 1.2
+      -- viền neon mờ
+      local glow = MakeGradient(item, T.blue, T.purple, 0.22, 6)
+      glow.Size = UDim2.new(1, 0, 0, 2)
+      glow.Position = UDim2.new(0, 0, 0, 0)
+      local ttl = Instance.new("TextLabel", item)
+      ttl.Size = UDim2.new(1, -24, 0, 22)
+      ttl.Position = UDim2.new(0, 12, 0, 8)
+      ttl.BackgroundTransparency = 1
+      ttl.Text = tostring(title or "PT HUB")
+      ttl.TextColor3 = T.text
+      ttl.Font = Enum.Font.GothamBold
+      ttl.TextSize = 14
+      ttl.TextXAlignment = Enum.TextXAlignment.Left
+      ttl.TextTruncate = Enum.TextTruncate.AtEnd
+      local body = Instance.new("TextLabel", item)
+      body.Size = UDim2.new(1, -24, 0, 30)
+      body.Position = UDim2.new(0, 12, 0, 30)
+      body.BackgroundTransparency = 1
+      body.Text = tostring(content or "")
+      body.TextColor3 = T.sub
+      body.Font = Enum.Font.Gotham
+      body.TextSize = 12
+      body.TextWrapped = true
+      body.TextXAlignment = Enum.TextXAlignment.Left
+      body.TextYAlignment = Enum.TextYAlignment.Top
+      -- đẩy toast cũ lên
+      local targetY = margin
+      for _, old in ipairs(Toasts.items) do
+        if old.Adornee and old.Adornee.Parent then
+          targetY = targetY + old.Adornee.AbsoluteSize.Y + 8
         end
       end
-    end
-    return n
-  end
-
-  local function GetBeli()
-    local ok, v = pcall(function()
-      return plr.Data and plr.Data.Beli and plr.Data.Beli.Value
-    end)
-    return ok and tonumber(v) or 0
-  end
-
-  -- ================= GUI =================
-  local gui = Instance.new("ScreenGui")
-  gui.Name = "PTHUB_Fallback"
-  gui.ResetOnSpawn = false
-  gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-  pcall(function() gui.Parent = (gethui and gethui()) or game:GetService("CoreGui") end)
-  if not gui.Parent then
-    pcall(function() gui.Parent = LP:WaitForChild("PlayerGui") end)
-  end
-
-  local main = Instance.new("Frame", gui)
-  main.Name = "MainFrame"
-  main.Size = UDim2.new(0, 430, 0, 560)
-  main.Position = UDim2.new(0.5, -215, 0.5, -280)
-  main.BackgroundColor3 = Color3.fromRGB(16, 20, 32)
-  main.BorderSizePixel = 0
-  local mCorner = Instance.new("UICorner", main)
-  mCorner.CornerRadius = UDim.new(0, 8)
-
-  local titleBar = Instance.new("Frame", main)
-  titleBar.Size = UDim2.new(1, 0, 0, 34)
-  titleBar.BackgroundTransparency = 1
-
-  local title = Instance.new("TextLabel", titleBar)
-  title.Size = UDim2.new(1, -40, 1, 0)
-  title.BackgroundTransparency = 1
-  title.Text = "PT HUB - Fallback Menu"
-  title.TextColor3 = Color3.fromRGB(255, 255, 255)
-  title.Font = Enum.Font.GothamBold
-  title.TextSize = 16
-  title.TextXAlignment = Enum.TextXAlignment.Left
-
-  local closeBtn = Instance.new("TextButton", titleBar)
-  closeBtn.Size = UDim2.new(0, 30, 0, 30)
-  closeBtn.Position = UDim2.new(1, -32, 0, 2)
-  closeBtn.Text = "X"
-  closeBtn.BackgroundTransparency = 1
-  closeBtn.TextColor3 = Color3.fromRGB(255, 90, 90)
-  closeBtn.Font = Enum.Font.GothamBold
-  closeBtn.TextSize = 16
-  closeBtn.MouseButton1Click:Connect(function() main.Visible = not main.Visible end)
-
-  -- nút mở lại menu khi đã thu nhỏ
-  local reopenBtn = Instance.new("TextButton", gui)
-  reopenBtn.Name = "Reopen"
-  reopenBtn.Size = UDim2.new(0, 90, 0, 30)
-  reopenBtn.Position = UDim2.new(0.02, 0, 0.85, 0)
-  reopenBtn.Text = "PT HUB"
-  reopenBtn.BackgroundColor3 = Color3.fromRGB(60, 70, 110)
-  reopenBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-  reopenBtn.Font = Enum.Font.GothamBold
-  reopenBtn.TextSize = 13
-  local rCorner = Instance.new("UICorner", reopenBtn)
-  rCorner.CornerRadius = UDim.new(0, 6)
-  reopenBtn.MouseButton1Click:Connect(function() main.Visible = true end)
-
-  -- kéo menu bằng thanh tiêu đề
-  local dragging, dragStart = false, nil
-  titleBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-      dragging = true
-      dragStart = input.Position
-    end
-  end)
-  UIS.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-      dragging = false
-    end
-  end)
-  UIS.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-      local delta = input.Position - dragStart
-      dragStart = input.Position
-      main.Position = main.Position + UDim2.new(0, delta.X, 0, delta.Y)
-    end
-  end)
-
-  -- thanh tab
-  local tabBar = Instance.new("Frame", main)
-  tabBar.Size = UDim2.new(1, -12, 0, 34)
-  tabBar.Position = UDim2.new(0, 6, 0, 38)
-  tabBar.BackgroundTransparency = 1
-  local tabLayout = Instance.new("UIListLayout", tabBar)
-  tabLayout.FillDirection = Enum.FillDirection.Horizontal
-  tabLayout.Padding = UDim.new(0, 4)
-  tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
-
-  local contentArea = Instance.new("Frame", main)
-  contentArea.Size = UDim2.new(1, -16, 1, -82)
-  contentArea.Position = UDim2.new(0, 8, 0, 76)
-  contentArea.BackgroundTransparency = 1
-
-  local tabNames = { "Main", "Fruit", "Raids", "Combat", "Travel", "Shop", "Misc" }
-  local tabButtons, frames = {}, {}
-  for i, tname in ipairs(tabNames) do
-    local b = Instance.new("TextButton", tabBar)
-    b.Size = UDim2.new(0, 56, 0, 30)
-    b.Text = tname
-    b.BackgroundColor3 = Color3.fromRGB(40, 48, 70)
-    b.TextColor3 = Color3.fromRGB(225, 230, 245)
-    b.Font = Enum.Font.Gotham
-    b.TextSize = 13
-    local bc = Instance.new("UICorner", b)
-    bc.CornerRadius = UDim.new(0, 6)
-    local sc = Instance.new("ScrollingFrame", contentArea)
-    sc.Size = UDim2.new(1, 0, 1, 0)
-    sc.BackgroundTransparency = 1
-    sc.ScrollBarThickness = 4
-    sc.CanvasSize = UDim2.new(0, 0, 0, 0)
-    sc.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    local layout = Instance.new("UIListLayout", sc)
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 4)
-    sc.Visible = (i == 1)
-    frames[tname] = sc
-    tabButtons[i] = b
-    b.MouseButton1Click:Connect(function()
-      for _, f in pairs(frames) do f.Visible = false end
-      for _, tb in ipairs(tabButtons) do tb.BackgroundColor3 = Color3.fromRGB(40, 48, 70) end
-      sc.Visible = true
-      b.BackgroundColor3 = Color3.fromRGB(80, 100, 160)
-    end)
-  end
-
-  local function Section(tname, text)
-    local lab = Instance.new("TextLabel", frames[tname])
-    lab.Size = UDim2.new(1, 0, 0, 22)
-    lab.BackgroundTransparency = 1
-    lab.Text = text
-    lab.TextColor3 = Color3.fromRGB(120, 205, 255)
-    lab.Font = Enum.Font.GothamBold
-    lab.TextSize = 13
-    lab.TextXAlignment = Enum.TextXAlignment.Left
-  end
-
-  local function Toggle(tname, title, stateFn, onChange)
-    local row = Instance.new("Frame", frames[tname])
-    row.Size = UDim2.new(1, 0, 0, 32)
-    row.BackgroundColor3 = Color3.fromRGB(28, 34, 50)
-    local rc = Instance.new("UICorner", row)
-    rc.CornerRadius = UDim.new(0, 6)
-    local lab = Instance.new("TextLabel", row)
-    lab.Size = UDim2.new(1, -64, 1, 0)
-    lab.BackgroundTransparency = 1
-    lab.Text = title
-    lab.TextColor3 = Color3.fromRGB(230, 235, 250)
-    lab.Font = Enum.Font.Gotham
-    lab.TextSize = 13
-    lab.TextXAlignment = Enum.TextXAlignment.Left
-    lab.TextTruncate = Enum.TextTruncate.AtEnd
-    local ind = Instance.new("TextButton", row)
-    ind.Size = UDim2.new(0, 54, 0, 22)
-    ind.Position = UDim2.new(1, -58, 0.5, -11)
-    ind.Text = "OFF"
-    ind.BackgroundColor3 = Color3.fromRGB(95, 40, 40)
-    ind.TextColor3 = Color3.fromRGB(255, 255, 255)
-    ind.Font = Enum.Font.GothamBold
-    ind.TextSize = 11
-    local ic = Instance.new("UICorner", ind)
-    ic.CornerRadius = UDim.new(0, 6)
-    local function refresh()
-      local on = stateFn() == true
-      ind.Text = on and "ON" or "OFF"
-      ind.BackgroundColor3 = on and Color3.fromRGB(45, 150, 70) or Color3.fromRGB(95, 40, 40)
-    end
-    ind.MouseButton1Click:Connect(function()
-      pcall(function() onChange(not (stateFn() == true)) end)
-      refresh()
-    end)
-    refresh()
-    return { Refresh = refresh }
-  end
-
-  local function Button(tname, title, cb)
-    local b = Instance.new("TextButton", frames[tname])
-    b.Size = UDim2.new(1, 0, 0, 30)
-    b.Text = title
-    b.BackgroundColor3 = Color3.fromRGB(40, 48, 70)
-    b.TextColor3 = Color3.fromRGB(230, 235, 250)
-    b.Font = Enum.Font.Gotham
-    b.TextSize = 13
-    local bc = Instance.new("UICorner", b)
-    bc.CornerRadius = UDim.new(0, 6)
-    b.MouseButton1Click:Connect(function()
-      pcall(cb)
-    end)
-  end
-
-  local function Dropdown(tname, title, options, getFn, setFn)
-    local row = Instance.new("Frame", frames[tname])
-    row.Size = UDim2.new(1, 0, 0, 32)
-    row.BackgroundColor3 = Color3.fromRGB(28, 34, 50)
-    local rc = Instance.new("UICorner", row)
-    rc.CornerRadius = UDim.new(0, 6)
-    local lab = Instance.new("TextLabel", row)
-    lab.Size = UDim2.new(1, -80, 1, 0)
-    lab.BackgroundTransparency = 1
-    lab.Text = title
-    lab.TextColor3 = Color3.fromRGB(230, 235, 250)
-    lab.Font = Enum.Font.Gotham
-    lab.TextSize = 13
-    lab.TextXAlignment = Enum.TextXAlignment.Left
-    lab.TextTruncate = Enum.TextTruncate.AtEnd
-    local btn = Instance.new("TextButton", row)
-    btn.Size = UDim2.new(0, 72, 0, 22)
-    btn.Position = UDim2.new(1, -76, 0.5, -11)
-    btn.BackgroundColor3 = Color3.fromRGB(55, 65, 95)
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Font = Enum.Font.Gotham
-    btn.TextSize = 11
-    local bc = Instance.new("UICorner", btn)
-    bc.CornerRadius = UDim.new(0, 6)
-    local idx = 1
-    local function refresh()
-      local cur = getFn()
-      idx = 0
-      for oi, o in ipairs(options) do
-        if o == cur then idx = oi break end
-      end
-      if idx == 0 then idx = 1 end
-      btn.Text = tostring(options[idx])
-    end
-    btn.MouseButton1Click:Connect(function()
-      idx = idx % #options + 1
-      pcall(function() setFn(options[idx]) end)
-      btn.Text = tostring(options[idx])
-    end)
-    refresh()
-  end
-
-  -- ================= CONTROLS: Main =================
-  Section("Main", "Farming")
-  Toggle("Main", "Auto Farm Level", function() return ENV.Level end, function(v) ENV.Level = v end)
-  Toggle("Main", "Auto Farm Nearest", function() return ENV.AutoFarmNear end, function(v) ENV.AutoFarmNear = v end)
-  local mobOptions = World1 and {"Bandit","Monkey","Gorilla","Pirate","Brute","Desert Bandit","Snow Bandit","Snowman","Chief Petty Officer","Sky Bandit","Dark Master","Toga Warrior","Gladiator","Military Soldier","Military Spy","Fishman Warrior","Fishman Commando","God's Guard","Shanda","Royal Squad","Royal Soldier","Galley Pirate","Galley Captain"}
-    or (World2 and {"Raider","Mercenary","Swan Pirate","Factory Staff","Marine Lieutenant","Marine Captain","Zombie","Vampire","Snow Trooper","Winter Warrior","Lab Subordinate","Horned Warrior","Magma Ninja","Lava Pirate","Ship Deckhand","Ship Engineer","Ship Steward","Ship Officer","Arctic Warrior","Snow Lurker","Sea Soldier","Water Fighter"})
-    or {"Pirate Millionaire","Dragon Crew Warrior","Dragon Crew Archer","Female Islander","Marine Commodore","Marine Rear Admiral","Fishman Raider","Fishman Captain","Forest Pirate","Mythological Pirate","Jungle Pirate","Musketeer Pirate","Reborn Skeleton","Living Zombie","Demonic Soul","Posessed Mummy","Peanut Scout","Peanut President","Ice Cream Chef","Cookie Crafter","Cake Guard","Baking Staff","Head Baker","Cocoa Warrior","Chocolate Bar Battler","Sweet Thief","Candy Rebel","Snow Demon","Isle Outlaw","Island Boy","Sun-kissed Warrior","Isle Champion"}
-  Dropdown("Main", "Select Mob", mobOptions,
-    function() return ENV.SelectMob end,
-    function(v) ENV.SelectMob = v end)
-  Toggle("Main", "Auto Kill Mob", function() return ENV.AutoKillMob end, function(v) ENV.AutoKillMob = v end)
-  Section("Main", "Chest")
-  Toggle("Main", "Auto Farm Chest", function() return ENV.AutoFarmChest end, function(v) ENV.AutoFarmChest = v end)
-  Section("Main", "Event")
-  Toggle("Main", "Auto Factory Raid", function() return ENV.AutoFactory end, function(v) ENV.AutoFactory = v end)
-  Toggle("Main", "Auto Farm Ectoplasm", function() return ENV.AutoEctoplasm end, function(v) ENV.AutoEctoplasm = v end)
-  Section("Main", "Weapon")
-  Dropdown("Main", "Select Weapon", {"Melee","Sword","Blox Fruit","Gun"},
-    function() return ENV.ChooseWP end,
-    function(v) ENV.ChooseWP = v end)
-
-  -- ================= CONTROLS: Fruit =================
-  Section("Fruit", "Fruits")
-  Toggle("Fruit", "Auto Random Fruit", function() return ENV.Random_Auto end, function(v) ENV.Random_Auto = v end)
-  Toggle("Fruit", "Auto Store Fruit", function() return ENV.StoreF end, function(v) ENV.StoreF = v end)
-  Toggle("Fruit", "Auto Drop Fruit", function() return ENV.DropFruit end, function(v) ENV.DropFruit = v end)
-  Toggle("Fruit", "Auto Tween to Fruit", function() return ENV.TwFruits end, function(v) ENV.TwFruits = v end)
-  Toggle("Fruit", "Auto Collect Fruit", function() return ENV.InstanceF end, function(v) ENV.InstanceF = v end)
-  Section("Fruit", "Shop")
-  Dropdown("Fruit", "Select Fruit Shop",
-    {"Rocket-Rocket","Spin-Spin","Blade-Blade","Spring-Spring","Bomb-Bomb","Smoke-Smoke","Spike-Spike","Flame-Flame","Ice-Ice","Sand-Sand","Dark-Dark","Diamond-Diamond","Light-Light","Rubber-Rubber","Ghost-Ghost","Magma-Magma","Quake-Quake","Buddha-Buddha","Love-Love","Spider-Spider","Sound-Sound","Phoenix-Phoenix","Portal-Portal","Lightning-Lightning","Pain-Pain","Blizzard-Blizzard","Gravity-Gravity","T-Rex-T-Rex","Mammoth-Mammoth","Dough-Dough","Shadow-Shadow","Venom-Venom","Gas-Gas","Control-Control","Spirit-Spirit","Leopard-Leopard","Yeti-Yeti","Kitsune-Kitsune","Dragon-Dragon"},
-    function() return ENV.SelectFruit end,
-    function(v) ENV.SelectFruit = v end)
-  Toggle("Fruit", "Auto Buy Fruit Shop", function() return ENV.AutoBuyFruitSniper end, function(v) ENV.AutoBuyFruitSniper = v end)
-  Toggle("Fruit", "Get Fruit In Inventory Below 1M", function() return ENV.AutoGetFruit end, function(v) ENV.AutoGetFruit = v end)
-
-  -- ================= CONTROLS: Raids =================
-  Section("Raids", "Dungeon")
-  Dropdown("Raids", "Select Chip", DungeonTables,
-    function() return ENV.SelectChip end,
-    function(v) ENV.SelectChip = v end)
-  Toggle("Raids", "Auto Buy Chip [Beli]", function() return ENV.AutoChipBeli end, function(v) ENV.AutoChipBeli = v end)
-  Toggle("Raids", "Auto Start Raid", function() return ENV.Auto_StartRaid end, function(v) ENV.Auto_StartRaid = v end)
-  Toggle("Raids", "Auto Raid + Next Island", function() return ENV.Raiding end, function(v) ENV.Raiding = v end)
-  Toggle("Raids", "Auto Farm Dungeon", function() return ENV.AutoFarmDungeon end, function(v) ENV.AutoFarmDungeon = v end)
-  Section("Raids", "Awakening")
-  Toggle("Raids", "Auto Awakening", function() return ENV.Auto_Awakener end, function(v) ENV.Auto_Awakener = v end)
-
-  -- ================= CONTROLS: Combat =================
-  Section("Combat", "Local Player")
-  local flying, flySpeed = false, 50
-  local flyBG, flyBV
-  local function SetFly(on)
-    flying = on
-    local char = LP.Character
-    if not char then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    local rootPart = char:FindFirstChild("HumanoidRootPart")
-    if not hum or not rootPart then return end
-    if flying then
-      hum.PlatformStand = true
-      pcall(function()
-        for _, part in ipairs(char:GetDescendants()) do
-          if part:IsA("BasePart") then part.CanCollide = false part.Massless = true end
-        end
-      end)
-      flyBG = Instance.new("BodyGyro", rootPart)
-      flyBG.P = 9e4
-      flyBG.maxTorque = Vector3.new(9e9, 9e9, 9e9)
-      flyBG.cframe = rootPart.CFrame
-      flyBV = Instance.new("BodyVelocity", rootPart)
-      flyBV.maxForce = Vector3.new(9e9, 9e9, 9e9)
-      flyBV.Velocity = Vector3.new(0, 0, 0)
-      task.spawn(function()
-        while flying do
-          task.wait()
-          pcall(function()
-            local cam = workspace.CurrentCamera
-            local look = cam and cam.CFrame.LookVector or Vector3.new(0, 0, -1)
-            local right = cam and cam.CFrame.RightVector or Vector3.new(1, 0, 0)
-            local up = Vector3.new(0, 1, 0)
-            local move = Vector3.new(0, 0, 0)
-            if UIS:IsKeyDown(Enum.KeyCode.W) then move = move + look end
-            if UIS:IsKeyDown(Enum.KeyCode.S) then move = move - look end
-            if UIS:IsKeyDown(Enum.KeyCode.A) then move = move - right end
-            if UIS:IsKeyDown(Enum.KeyCode.D) then move = move + right end
-            if UIS:IsKeyDown(Enum.KeyCode.Space) then move = move + up end
-            if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then move = move - up end
-            if flyBV then flyBV.Velocity = move * flySpeed end
-            if flyBG and cam then flyBG.cframe = cam.CFrame end
-          end)
-        end
-      end)
-    else
-      hum.PlatformStand = false
-      if flyBG then pcall(function() flyBG:Destroy() end) flyBG = nil end
-      if flyBV then pcall(function() flyBV:Destroy() end) flyBV = nil end
-      pcall(function()
-        for _, part in ipairs(char:GetDescendants()) do
-          if part:IsA("BasePart") then part.CanCollide = true end
-        end
-      end)
-    end
-  end
-  Toggle("Combat", "Enable Fly", function() return flying end, function(v) SetFly(v) end)
-  Dropdown("Combat", "Fly Speed", {"50","100","150","200"},
-    function() return tostring(flySpeed) end,
-    function(v) flySpeed = tonumber(v) or 50 end)
-  Toggle("Combat", "Safe Mode", function() return ENV.SafeMode end, function(v) ENV.SafeMode = v end)
-
-  -- ================= CONTROLS: Travel =================
-  Section("Travel", "Island")
-  local islandOptions = {}
-  pcall(function()
-    local locs = workspace:FindFirstChild("_WorldOrigin") and workspace._WorldOrigin:FindFirstChild("Locations")
-    if locs then
-      for _, v in ipairs(locs:GetChildren()) do
-        table.insert(islandOptions, v.Name)
-      end
-    end
-  end)
-  if #islandOptions == 0 then islandOptions = { "Pirates", "Marine", "Jungle", "Desert", "Frozen Village" } end
-  Dropdown("Travel", "Select Travelling", islandOptions,
-    function() return ENV.Island end,
-    function(v) ENV.Island = v end)
-  Toggle("Travel", "Auto Travel", function() return ENV.Teleport end, function(v) ENV.Teleport = v end)
-  Section("Travel", "Worlds")
-  Button("Travel", "Travel East Blue (World 1)", function()
-    pcall(function() replicated.Remotes.CommF_:InvokeServer("TravelMain") end)
-  end)
-  Button("Travel", "Travel Dressrosa (World 2)", function()
-    pcall(function() replicated.Remotes.CommF_:InvokeServer("TravelDressrosa") end)
-  end)
-  Button("Travel", "Travel Zou (World 3)", function()
-    pcall(function() replicated.Remotes.CommF_:InvokeServer("TravelZou") end)
-  end)
-
-  -- ================= CONTROLS: Shop =================
-  Section("Shop", "Haki")
-  Button("Shop", "Buy Buso", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyHaki", "Buso") end) end)
-  Button("Shop", "Buy Geppo", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyHaki", "Geppo") end) end)
-  Button("Shop", "Buy Soru", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyHaki", "Soru") end) end)
-  Button("Shop", "Buy Ken", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("KenTalk", "Buy") end) end)
-  Section("Shop", "Fighting Style")
-  Button("Shop", "Buy Black Leg", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyBlackLeg") end) end)
-  Button("Shop", "Buy Electro", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyElectro") end) end)
-  Button("Shop", "Buy Fishman Karate", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyFishmanKarate") end) end)
-  Button("Shop", "Buy Superhuman", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuySuperhuman") end) end)
-  Button("Shop", "Buy Death Step", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyDeathStep") end) end)
-  Button("Shop", "Buy Sharkman Karate", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuySharkmanKarate") end) end)
-  Button("Shop", "Buy ElectricClaw", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyElectricClaw") end) end)
-  Button("Shop", "Buy DragonTalon", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyDragonTalon") end) end)
-  Button("Shop", "Buy Godhuman", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyGodhuman") end) end)
-  Button("Shop", "Buy SanguineArt", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuySanguineArt") end) end)
-  Section("Shop", "Accessory")
-  Button("Shop", "Buy Tomoe Ring", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyItem", "Tomoe Ring") end) end)
-  Button("Shop", "Buy Black Cape", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyItem", "Black Cape") end) end)
-  Button("Shop", "Buy Swordsman Hat", function() pcall(function() replicated.Remotes.CommF_:InvokeServer("BuyItem", "Swordsman Hat") end) end)
-
-  -- ================= CONTROLS: Misc =================
-  Section("Misc", "Server")
-  Button("Misc", "Redeem All Codes", function()
-    local codes = {
-      "LIGHTNINGABUSE","1LOSTADMIN","ADMINFIGHT","GIFTING_HOURS","NOMOREHACK",
-      "BANEXPLOIT","WildDares","BossBuild","GetPranked","EARN_FRUITS",
-      "SUB2GAMERROBOT_RESET1","KITT_RESET","Bignews","CHANDLER","Fudd10",
-      "fudd10_v2","Sub2UncleKizaru","FIGHT4FRUIT","kittgaming","TRIPLEABUSE",
-      "Sub2CaptainMaui","Sub2Fer999","Enyu_is_Pro","Magicbus","JCWK",
-      "Starcodeheo","Bluxxy","SUB2GAMERROBOT_EXP1","Sub2NoobMaster123",
-      "Sub2Daigrock","Axiore","TantaiGaming","StrawHatMaine","Sub2OfficialNoobie",
-      "TheGreatAce","JULYUPDATE_RESET","ADMINHACKED","SEATROLLING","24NOADMIN",
-      "ADMIN_TROLL","NEWTROLL","SECRET_ADMIN","staffbattle","NOEXPLOIT",
-      "NOOB2ADMIN","CODESLIDE","fruitconcepts","krazydares"
-    }
-    for _, code in ipairs(codes) do
-      task.wait(0)
-      pcall(function()
-        local rem = replicated.Remotes:FindFirstChild("Redeem")
-        if rem then
-          if rem.InvokeServer then rem:InvokeServer(code) else rem:FireServer(code) end
-        end
-      end)
-    end
-  end)
-  Button("Misc", "Rejoin Server", function()
-    pcall(function() TeleportS:Teleport(game.PlaceId, LP) end)
-  end)
-  Button("Misc", "Hop Server", function()
-    task.spawn(function()
-      local ok, servers = pcall(function()
-        return HttpS:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100")).data
-      end)
-      if ok and servers then
-        for _, s in pairs(servers) do
-          if s.playing < s.maxPlayers then
-            pcall(function() TeleportS:TeleportToPlaceInstance(game.PlaceId, s.id, LP) end)
-            break
-          end
-        end
-      end
-    end)
-  end)
-  Section("Misc", "Team")
-  Button("Misc", "Set Pirate Team", function() pcall(Pirates) end)
-  Button("Misc", "Set Marine Team", function() pcall(Marines) end)
-  Section("Misc", "Graphics")
-  Toggle("Misc", "Full Bright", function() return ENV.bright end, function(v)
-    ENV.bright = v
-    if v then
-      Lighting.Ambient = Color3.new(1, 1, 1)
-      Lighting.ColorShift_Bottom = Color3.new(1, 1, 1)
-      Lighting.ColorShift_Top = Color3.new(1, 1, 1)
-    else
-      Lighting.Ambient = Color3.new(0, 0, 0)
-      Lighting.ColorShift_Bottom = Color3.new(0, 0, 0)
-      Lighting.ColorShift_Top = Color3.new(0, 0, 0)
-    end
-  end)
-  Dropdown("Misc", "Select Time", {"Day", "Night"},
-    function() return ENV.SelectDN end,
-    function(v) ENV.SelectDN = v end)
-  Toggle("Misc", "Turn on Time", function() return ENV.daylightN end, function(v) ENV.daylightN = v end)
-  Button("Misc", "Turn on Low CPU", function()
-    if LowCpu then pcall(LowCpu) end
-  end)
-
-  -- ================= FEATURE LOOPS =================
-  -- Auto Farm Level
-  task.spawn(function()
-    local alreadyTeleported = false
-    local teleporting = false
-    local function IsInSubmergedIsland()
-      local char = plr.Character
-      if not char then return false end
-      local hrp = char:FindFirstChild("HumanoidRootPart")
-      if not hrp then return false end
-      local islandXZ = Vector3.new(11520.8017578125, 0, 9829.513671875)
-      local playerXZ = Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
-      return (playerXZ - islandXZ).Magnitude < 2000
-    end
-    while task.wait(0.2) do
-      if ENV.Level then
-        pcall(function()
-          local char = plr.Character or plr.CharacterAdded:Wait()
-          local Root = char:WaitForChild("HumanoidRootPart")
-          if not Root then return end
-          local level = plr.Data.Level.Value
-          local inSub = IsInSubmergedIsland()
-          local questUI = plr.PlayerGui.Main.Quest
-          local QuestTitle = questUI.Visible and questUI.Container.QuestTitle.Title.Text or ""
-          if level >= 2600 and not inSub and not teleporting and not alreadyTeleported then
-            teleporting = true
-            local npcPos = CFrame.new(-16269.7041, 25.2288494, 1373.65955)
-            local teleportAttempts = 0
-            repeat
-              task.wait(0.1)
-              _tp(npcPos)
-              teleportAttempts = teleportAttempts + 1
-            until not ENV.Level or (Root.Position - npcPos.Position).Magnitude <= 8 or teleportAttempts > 20
-            if not ENV.Level then teleporting = false return end
-            task.wait(1)
-            pcall(function()
-              local net = replicated:FindFirstChild("Modules") and replicated.Modules:FindFirstChild("Net")
-              local sub = net and net:FindFirstChild("RF/SubmarineWorkerSpeak")
-              if sub then sub:InvokeServer("TravelToSubmergedIsland") end
-            end)
-            local timeout = os.clock()
-            repeat
-              task.wait(0.5)
-              local currentInSub = IsInSubmergedIsland()
-              local farFromNPC = (Root.Position - npcPos.Position).Magnitude > 50
-              if currentInSub or farFromNPC then break end
-            until not ENV.Level or os.clock() - timeout > 15
-            task.wait(2)
-            alreadyTeleported = true
-            teleporting = false
-          elseif inSub or level < 2600 then
-            alreadyTeleported = true
-            teleporting = false
-            local questData = QuestNeta()
-            if not questData or not questData[1] then task.wait(1) return end
-            if questUI.Visible and not string.find(QuestTitle, questData[1]) then
-              replicated.Remotes.CommF_:InvokeServer("AbandonQuest")
-              task.wait(0.2)
-              return
-            end
-            if not questUI.Visible then
-              local questPos = questData[6]
-              if questPos then
-                _tp(questPos)
-                task.wait(2)
-                if (Root.Position - questPos.Position).Magnitude <= 10 then
-                  pcall(function() replicated.Remotes.CommF_:InvokeServer("StartQuest", questData[3], questData[2]) end)
-                  task.wait(1)
-                end
-              else
-                pcall(function() replicated.Remotes.CommF_:InvokeServer("StartQuest", questData[3], questData[2]) end)
-                task.wait(1)
-              end
-              return
-            end
-            local enemyName = questData[1]
-            local foundMob = false
-            for _, v in pairs(workspace.Enemies:GetChildren()) do
-              if v.Name == enemyName and Attack.Alive(v) then
-                foundMob = true
-                repeat
-                  task.wait(0.1)
-                  _tp(v.HumanoidRootPart.CFrame * CFrame.new(0, 20, 0))
-                  Attack.Kill(v, ENV.Level)
-                  if not questUI.Visible then break end
-                until not ENV.Level or not v.Parent or v.Humanoid.Health <= 0
-                task.wait(2)
-              end
-            end
-            if not foundMob then
-              for _, v in pairs(replicated:GetChildren()) do
-                if v.Name == enemyName and Attack.Alive(v) then
-                  foundMob = true
-                  _tp(v.HumanoidRootPart.CFrame * CFrame.new(0, 20, 0))
-                  break
-                end
-              end
-            end
-            if not foundMob then
-              local wo = workspace:FindFirstChild("_WorldOrigin")
-              local es = wo and wo:FindFirstChild("EnemySpawns")
-              if es then
-                for _, spawnPoint in pairs(es:GetChildren()) do
-                  if string.find(spawnPoint.Name, enemyName) then
-                    _tp(spawnPoint.CFrame * CFrame.new(0, 20, 0))
-                    break
-                  end
-                end
-              end
-            end
+      item.Position = UDim2.new(1, 20, 0, targetY)
+      item.Adornee = nil
+      table.insert(Toasts.items, { Adornee = item })
+      -- slide vào
+      item.Position = UDim2.new(1, W + 20, 0, targetY)
+      TweenService:Create(item, TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Position = UDim2.new(1, -W - margin, 0, targetY) }):Play()
+      task.delay(duration or 4, function()
+        if not item.Parent then return end
+        local out = TweenService:Create(item, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = UDim2.new(1, 20, 0, targetY) })
+        out:Play()
+        task.delay(0.32, function()
+          pcall(function() item:Destroy() end)
+          for i = #Toasts.items, 1, -1 do
+            if Toasts.items[i].Adornee == item then table.remove(Toasts.items, i) end
           end
         end)
+      end)
+    end)
+  end
+
+  -- ============ TOOLTIP ============
+  local TipGui, TipFrame, TipText, TipShowToken
+  local function GetTip()
+    if TipGui and TipGui.Parent then return TipFrame end
+    TipGui = Instance.new("ScreenGui")
+    TipGui.Name = "PTHUB_Tooltip"
+    TipGui.ResetOnSpawn = false
+    TipGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    TipGui.DisplayOrder = 2147483646
+    local ok = pcall(function() TipGui.Parent = (gethui and gethui()) or CoreGui end)
+    if not ok or not TipGui.Parent then pcall(function() TipGui.Parent = LP:WaitForChild("PlayerGui") end) end
+    TipFrame = Instance.new("Frame", TipGui)
+    TipFrame.Name = "Tip"
+    TipFrame.Size = UDim2.new(0, 0, 0, 0)
+    TipFrame.BackgroundColor3 = Color3.fromRGB(8, 10, 18)
+    TipFrame.BackgroundTransparency = 0.04
+    TipFrame.BorderSizePixel = 0
+    TipFrame.ZIndex = 10
+    RoundRect(TipFrame, 8)
+    Stroke(TipFrame, 0.35, LerpC(T.blue, T.purple, 0.6))
+    TipFrame.Visible = false
+    TipText = Instance.new("TextLabel", TipFrame)
+    TipText.Size = UDim2.new(1, -16, 1, 0)
+    TipText.Position = UDim2.new(0, 8, 0, 0)
+    TipText.BackgroundTransparency = 1
+    TipText.TextColor3 = T.text
+    TipText.Font = Enum.Font.Gotham
+    TipText.TextSize = 12
+    TipText.TextWrapped = true
+    TipText.TextXAlignment = Enum.TextXAlignment.Left
+    TipText.TextYAlignment = Enum.TextYAlignment.Center
+    return TipFrame
+  end
+
+  local function HideTip()
+    TipShowToken = (TipShowToken or 0) + 1
+    pcall(function()
+      if TipFrame then
+        TipFrame.Visible = false
+        TipFrame.Position = UDim2.new(0, -999, 0, -999)
+      end
+    end)
+  end
+
+  local function BindTip(target, text)
+    if not target then return end
+    local ok, _ = pcall(function() return target.MouseEnter end)
+    if not ok then return end
+    local function enter()
+      if text == nil or text == "" then return end
+      local token = (TipShowToken or 0)
+      task.delay(0.55, function()
+        if token ~= (TipShowToken or 0) then return end
+        local f = GetTip()
+        TipText.Text = text
+        local maxW = 230
+        local estH = math.max(26, math.ceil(#text / 26) * 15)
+        f.Size = UDim2.new(0, math.min(maxW, 30 + #text * 5.2), 0, estH)
+        local mpos = UserInputService:GetMouseLocation()
+        local vs = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
+        local x = math.clamp(mpos.X + 14, 4, vs.X - f.AbsoluteSize.X - 4)
+        local y = math.clamp(mpos.Y + 14, 4, vs.Y - f.AbsoluteSize.Y - 4)
+        f.Position = UDim2.fromOffset(x, y)
+        f.Visible = true
+        f.BackgroundTransparency = 0.04
+      end)
+    end
+    local function leave()
+      HideTip()
+    end
+    target.MouseEnter:Connect(enter)
+    target.MouseLeave:Connect(leave)
+  end
+
+  -- ============ BLUR (glassmorphism backdrop) ============
+  local blurEff
+  local function SetBlur(on)
+    pcall(function()
+      if not blurEff or not blurEff.Parent then
+        blurEff = Instance.new("BlurEffect", Lighting)
+        blurEff.Size = 0
+      end
+      TweenService:Create(blurEff, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = on and 2 or 0 }):Play()
+    end)
+  end
+
+  -- ============ CONTAINER (tab / section) ============
+  local Container = {}
+  Container.__index = Container
+
+  local function MakeRow(parent, height)
+    local row = Instance.new("Frame", parent)
+    row.Size = UDim2.new(1, 0, 0, height)
+    row.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    row.BackgroundTransparency = 1 - T.rowA
+    row.BorderSizePixel = 0
+    RoundRect(row, 10)
+    Stroke(row, 0.06)
+    return row
+  end
+
+  local function RowLabel(row, text, width)
+    local lab = Instance.new("TextLabel", row)
+    lab.Size = UDim2.new(width and 0 or 1, width and width or -40, 1, 0)
+    if width then lab.Position = UDim2.new(0, 14, 0, 0) end
+    lab.BackgroundTransparency = 1
+    lab.Text = tostring(text)
+    lab.TextColor3 = T.text
+    lab.Font = Enum.Font.Gotham
+    lab.TextSize = 13
+    lab.TextXAlignment = Enum.TextXAlignment.Left
+    lab.TextTruncate = Enum.TextTruncate.AtEnd
+    return lab
+  end
+
+  local function IsOn(val)
+    return val == true
+  end
+
+  -- ---------- TOGGLE ----------
+  function Container:AddToggle(o)
+    local flag = o.Flag or ("PTHUB_T_" .. tostring(o.Name or o.Title or ""))
+    local cb = o.Callback or function() end
+    local state = IsOn(o.Default)
+    local row = MakeRow(self.Scroll, 38)
+    local lab = RowLabel(row, o.Name or o.Title or "Toggle")
+    if o.Description and o.Description ~= "" then
+      BindTip(row, o.Description)
+    end
+    -- track
+    local track = Instance.new("TextButton", row)
+    track.Name = "Track"
+    track.Size = UDim2.new(0, 48, 0, 26)
+    track.Position = UDim2.new(1, -60, 0.5, -13)
+    track.BackgroundColor3 = T.track
+    track.Text = ""
+    track.AutoButtonColor = false
+    track.BorderSizePixel = 0
+    RoundRect(track, 13)
+    Stroke(track, 0.15)
+    local grad = MakeGradient(track, T.blue, T.purple, 1, 10)
+    grad.Size = UDim2.new(1, 0, 1, 0)
+    grad.Position = UDim2.new(0, 0, 0, 0)
+    grad.Visible = false
+    RoundRect(grad, 13)
+    local knob = Instance.new("Frame", track)
+    knob.Name = "Knob"
+    knob.Size = UDim2.new(0, 20, 0, 20)
+    knob.Position = UDim2.new(0, 3, 0.5, -10)
+    knob.BackgroundColor3 = Color3.fromRGB(250, 252, 255)
+    knob.BorderSizePixel = 0
+    RoundRect(knob, 10)
+    local knobGlow = Instance.new("Frame", knob)
+    knobGlow.Size = UDim2.new(1, 0, 1, 0)
+    knobGlow.BackgroundTransparency = 1
+    local function ApplyState(animate)
+      grad.Visible = state
+      knobGlow.Transparency = state and 0 or 1
+      if state then
+        knobGlow.BackgroundColor3 = LerpC(T.blue, T.purple, 0.5)
+      end
+      if animate then
+        TweenService:Create(knob, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = UDim2.new(0, state and 25 or 3, 0.5, -10) }):Play()
       else
-        teleporting = false
-        alreadyTeleported = false
+        knob.Position = UDim2.new(0, state and 25 or 3, 0.5, -10)
       end
     end
-  end)
-
-  -- Auto Farm Nearest
-  task.spawn(function()
-    while task.wait() do
-      if ENV.AutoFarmNear then
-        pcall(function()
-          for _, v in pairs(workspace.Enemies:GetChildren()) do
-            if v:FindFirstChild("Humanoid") and v.Humanoid.Health > 0 then
-              repeat
-                task.wait()
-                Attack.Kill(v, ENV.AutoFarmNear)
-              until not ENV.AutoFarmNear or not v.Parent or v.Humanoid.Health <= 0
-            end
-          end
-        end)
-      end
+    ApplyState(false)
+    track.MouseButton1Click:Connect(function()
+      state = not state
+      ApplyState(true)
+      pcall(cb, state)
+    end)
+    -- hover sáng nhẹ
+    local function Hover(on)
+      TweenService:Create(track, TweenInfo.new(0.18), { BackgroundColor3 = on and LerpC(T.track, T.blue, 0.18) or T.track }):Play()
     end
-  end)
-
-  -- Auto Kill Mob
-  task.spawn(function()
-    while task.wait() do
-      if ENV.AutoKillMob then
-        pcall(function()
-          for _, v in pairs(workspace.Enemies:GetChildren()) do
-            if v.Name == ENV.SelectMob and v:FindFirstChild("Humanoid") and v:FindFirstChild("HumanoidRootPart") and v.Humanoid.Health > 0 then
-              repeat
-                task.wait()
-                Attack.Kill(v, ENV.AutoKillMob)
-              until not ENV.AutoKillMob or not v.Parent or v.Humanoid.Health <= 0
-            end
-          end
-        end)
-      end
-    end
-  end)
-
-  -- Auto Farm Chest
-  task.spawn(function()
-    while task.wait(0.2) do
-      if ENV.AutoFarmChest then
-        pcall(function()
-          local tagged = CollectionS:GetTagged("_ChestTagged")
-          local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-          if not hrp then return end
-          local dist, nearest = math.huge, nil
-          for _, chest in ipairs(tagged) do
-            if not chest:GetAttribute("IsDisabled") then
-              local d = (chest:GetPivot().Position - hrp.Position).Magnitude
-              if d < dist then dist, nearest = d, chest end
-            end
-          end
-          if nearest then _tp(nearest:GetPivot()) end
-        end)
-      end
-    end
-  end)
-
-  -- Auto Factory Raid
-  task.spawn(function()
-    while task.wait(0.1) do
-      if ENV.AutoFactory then
-        pcall(function()
-          local v = GetConnectionEnemies("Core")
-          if v then
-            repeat
-              task.wait()
-              EquipWeapon(ENV.SelectWeapon)
-              _tp(CFrame.new(448.46756, 199.356781, -441.389252))
-            until v.Humanoid.Health <= 0 or not ENV.AutoFactory
-          else
-            _tp(CFrame.new(448.46756, 199.356781, -441.389252))
-          end
-        end)
-      end
-    end
-  end)
-
-  -- Auto Farm Ectoplasm
-  task.spawn(function()
-    while task.wait(0.1) do
-      if ENV.AutoEctoplasm then
-        pcall(function()
-          local EctoTable = {"Ship Deckhand", "Ship Engineer", "Ship Steward", "Ship Officer", "Arctic Warrior"}
-          local v = GetConnectionEnemies(EctoTable)
-          if Attack.Alive(v) then
-            repeat
-              task.wait()
-              Attack.Kill(v, ENV.AutoEctoplasm)
-            until not ENV.AutoEctoplasm or not v.Parent or v.Humanoid.Health <= 0
-          else
-            replicated.Remotes.CommF_:InvokeServer("requestEntrance", Vector3.new(923.21252441406, 126.9760055542, 32852.83203125))
-          end
-        end)
-      end
-    end
-  end)
-
-  -- Weapon auto-select
-  task.spawn(function()
-    while task.wait(0.5) do
-      pcall(function()
-        local want = ENV.ChooseWP
-        if want then
-          for _, v in pairs(plr.Backpack:GetChildren()) do
-            if v:IsA("Tool") and v.ToolTip == want then
-              ENV.SelectWeapon = v.Name
-            end
-          end
-        end
-      end)
-    end
-  end)
-
-  -- Auto Random Fruit
-  task.spawn(function()
-    while task.wait(0.5) do
-      if ENV.Random_Auto then
-        pcall(function()
-          local now = os.clock()
-          if now - RandomFruitCooldown < 1.5 then return end
-          local dealer = FindRandomDealer()
-          local dealerRoot = dealer and dealer.root
-          local dealerKey = dealer and dealer.name
-          local targetCF = dealerRoot and dealerRoot.CFrame
-          if not targetCF then
-            targetCF = GetDealerFallbackCFrame()
-            dealerKey = dealerKey or (World1 and "Cousin" or "Zioles")
-          end
-          if not targetCF then return end
-          local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-          local inRange = hrp and (hrp.Position - targetCF.Position).Magnitude <= 30
-          if not inRange then
-            GoToRandomDealer(targetCF)
-            return
-          end
-          local beli = GetBeli()
-          if beli <= 0 then beli = math.huge end
-          if beli < 30000 then RandomFruitCooldown = now return end
-          local before = CountHeldFruits()
-          if dealerKey then
-            pcall(function() replicated.Remotes.CommF_:InvokeServer(dealerKey, "Buy") end)
-          else
-            pcall(function()
-              if not replicated.Remotes.CommF_:InvokeServer("Zioles", "Buy") then
-                replicated.Remotes.CommF_:InvokeServer("Cousin", "Buy")
-              end
-            end)
-          end
-          RandomFruitCooldown = now
-          task.wait(0.8)
-          if CountHeldFruits() > before or GetBeli() < beli then
-            RandomFruitCooldown = now - 0.6
-          end
-        end)
-      end
-    end
-  end)
-
-  -- Auto Store Fruit
-  task.spawn(function()
-    while task.wait(0.4) do
-      if ENV.StoreF then
-        pcall(function() UpdStFruit() end)
-      end
-    end
-  end)
-
-  -- Auto Drop Fruit
-  task.spawn(function()
-    while task.wait(0.2) do
-      if ENV.DropFruit then
-        pcall(function() DropFruits() end)
-      end
-    end
-  end)
-
-  -- Auto Tween to Fruit
-  task.spawn(function()
-    while task.wait(0.2) do
-      if ENV.TwFruits then
-        pcall(function()
-          for _, x1 in pairs(workspace:GetChildren()) do
-            if string.find(x1.Name, "Fruit") and x1:FindFirstChild("Handle") then
-              _tp(x1.Handle.CFrame)
-            end
-          end
-        end)
-      end
-    end
-  end)
-
-  -- Auto Collect Fruit
-  task.spawn(function()
-    while task.wait(0.2) do
-      if ENV.InstanceF then
-        pcall(function() collectFruits(ENV.InstanceF) end)
-      end
-    end
-  end)
-
-  -- Auto Buy Fruit Shop
-  task.spawn(function()
-    while task.wait(1) do
-      if ENV.AutoBuyFruitSniper then
-        pcall(function()
-          replicated.Remotes.CommF_:InvokeServer("GetFruits")
-          replicated.Remotes.CommF_:InvokeServer("PurchaseRawFruit", ENV.SelectFruit)
-        end)
-      end
-    end
-  end)
-
-  -- Get Fruit In Inventory Below 1M
-  task.spawn(function()
-    while task.wait(1) do
-      if ENV.AutoGetFruit then
-        pcall(function()
-          local fruits = {
-            "Rocket-Rocket", "Spin-Spin", "Chop-Chop", "Spring-Spring", "Bomb-Bomb", "Smoke-Smoke",
-            "Spike-Spike", "Flame-Flame", "Falcon-Falcon", "Ice-Ice", "Sand-Sand", "Dark-Dark",
-            "Ghost-Ghost", "Diamond-Diamond", "Light-Light", "Rubber-Rubber", "Barrier-Barrier"
-          }
-          for _, fruit in ipairs(fruits) do
-            replicated.Remotes.CommF_:InvokeServer("LoadFruit", fruit)
-          end
-        end)
-      end
-    end
-  end)
-
-  -- Auto Buy Chip [Beli]
-  task.spawn(function()
-    while task.wait(1) do
-      if ENV.AutoChipBeli then
-        pcall(function()
-          if not GetBP("Special Microchip") then
-            replicated.Remotes.CommF_:InvokeServer("RaidsNpc", "Select", ENV.SelectChip)
-          end
-        end)
-      end
-    end
-  end)
-
-  -- Auto Start Raid
-  task.spawn(function()
-    while task.wait(0.3) do
-      if not ENV.Auto_StartRaid then continue end
-      pcall(function()
-        local guiP = plr:FindFirstChild("PlayerGui")
-        local mainG = guiP and guiP:FindFirstChild("Main")
-        local top = mainG and mainG:FindFirstChild("TopHUDList")
-        if not top or not top:FindFirstChild("RaidTimer") or top.RaidTimer.Visible then return end
-        if not GetBP("Special Microchip") then return end
-        local btn
-        pcall(function()
-          if World2 then
-            btn = workspace.Map.CircleIsland.RaidSummon2.Button.Main
-          elseif World3 then
-            btn = workspace.Map["Boat Castle"].RaidSummon2.Button.Main
-          end
-        end)
-        if btn then
-          if btn:FindFirstChild("ProximityPrompt") then
-            fireproximityprompt(btn.ProximityPrompt)
-          elseif btn:FindFirstChild("ClickDetector") then
-            fireclickdetector(btn.ClickDetector)
-          end
-        end
-      end)
-    end
-  end)
-
-  -- Auto Awakening
-  task.spawn(function()
-    while task.wait(0.3) do
-      if ENV.Auto_Awakener then
-        pcall(function()
-          replicated.Remotes.CommF_:InvokeServer("Awakener", "Check")
-          replicated.Remotes.CommF_:InvokeServer("Awakener", "Awaken")
-        end)
-      end
-    end
-  end)
-
-  -- Auto Raid + Next Island
-  task.spawn(function()
-    local locations = workspace:FindFirstChild("_WorldOrigin") and workspace._WorldOrigin:FindFirstChild("Locations")
-    local islands = { "Island 1", "Island 2", "Island 3", "Island 4", "Island 5" }
-    local currentIsland = nil
-    while task.wait(0.3) do
-      if not ENV.Raiding then continue end
-      pcall(function()
-        if not locations then return end
-        local gui = plr.PlayerGui.Main.TopHUDList.RaidTimer
-        if not gui.Visible then return end
-        local char = plr.Character
-        if not char then return end
-        local root = char:FindFirstChild("HumanoidRootPart")
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not root or not hum or hum.Health <= 0 then return end
-        if hum.Sit or hum.PlatformStand or root.Anchored then return end
-        local closestDist = 999999
-        for _, name in ipairs(islands) do
-          local loc = locations:FindFirstChild(name)
-          if loc then
-            local dist = (root.Position - loc.Position).Magnitude
-            if dist < closestDist then closestDist = dist currentIsland = name end
-          end
-        end
-        if not currentIsland then return end
-        local islandPos = locations:FindFirstChild(currentIsland)
-        if not islandPos then return end
-        local foundEnemies = false
-        for _, mob in ipairs(workspace.Enemies:GetChildren()) do
-          local eh = mob:FindFirstChild("Humanoid")
-          local ehrp = mob:FindFirstChild("HumanoidRootPart")
-          if eh and ehrp and eh.Health > 0 then
-            if (ehrp.Position - islandPos.Position).Magnitude < 450 then
-              foundEnemies = true
-              repeat
-                task.wait()
-                Attack.Kill(mob, ENV.Raiding)
-              until not ENV.Raiding or not mob.Parent or eh.Health <= 0
-            end
-          end
-        end
-        if not foundEnemies then
-          local idx = table.find(islands, currentIsland)
-          if idx and islands[idx + 1] then
-            local nxt = locations:FindFirstChild(islands[idx + 1])
-            if nxt then _tp(nxt.CFrame * CFrame.new(0, 45, 120)) end
-            currentIsland = islands[idx + 1]
-            task.wait(1)
-          end
-        end
-      end)
-    end
-  end)
-
-  -- Auto Farm Dungeon
-  task.spawn(function()
-    while task.wait(0.15) do
-      if ENV.AutoFarmDungeon then
-        pcall(function()
-          local char = plr.Character
-          local hrp = char and char:FindFirstChild("HumanoidRootPart")
-          local hum = char and char:FindFirstChildOfClass("Humanoid")
-          if not hrp or not hum or hum.Health <= 0 then return end
-          for _, mob in pairs(workspace.Enemies:GetChildren()) do
-            if not ENV.AutoFarmDungeon then break end
-            local mh = mob:FindFirstChild("Humanoid")
-            local mhrp = mob:FindFirstChild("HumanoidRootPart")
-            if mh and mhrp and mh.Health > 0 then
-              local dist = (mhrp.Position - hrp.Position).Magnitude
-              if dist <= 5000 then
-                repeat
-                  task.wait()
-                  Attack.Kill(mob, true)
-                until not ENV.AutoFarmDungeon or not mob.Parent or mh.Health <= 0
-              end
-            end
-          end
-        end)
-      end
-    end
-  end)
-
-  -- Safe Mode
-  task.spawn(function()
-    while task.wait(0.1) do
-      if ENV.SafeMode then
-        pcall(function()
-          local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-          if hrp then _tp(hrp.CFrame * CFrame.new(0, 1000, 0)) end
-        end)
-      end
-    end
-  end)
-
-  -- Auto Travel
-  task.spawn(function()
-    while task.wait(0.2) do
-      if ENV.Teleport and ENV.Island then
-        pcall(function()
-          local wo = workspace:FindFirstChild("_WorldOrigin")
-          local locs = wo and wo:FindFirstChild("Locations")
-          if locs then
-            local v = locs:FindFirstChild(ENV.Island)
-            if v then _tp(v.CFrame * CFrame.new(0, 30, 0)) end
-          end
-        end)
-      end
-    end
-  end)
-
-  -- Time
-  task.spawn(function()
-    while task.wait() do
-      if ENV.daylightN then
-        pcall(function()
-          if ENV.SelectDN == "Day" then
-            Lighting.ClockTime = 12
-          elseif ENV.SelectDN == "Night" then
-            Lighting.ClockTime = 0
-          end
-        end)
-      end
-    end
-  end)
-
-  Notify("Fallback menu enabled")
-end
-
--- neu khong co Fluent -> dung fallback menu va ket thuc script tai day
--- (bo qua toan bo phan GUI Fluent ben duoi)
-if not Fluent then
-  BuildFallbackUI()
-  return
-end
-
-local UserInputService = game:GetService("UserInputService")
---local LocalPlayer = game:GetService("Players").LocalPlayer -- [PT HUB FIX] duplicate top-level local removed: the chunk was at 199/200 registers (Luau's hard limit is 200). Already declared identically earlier.
-
--- unique-flag generator (Fluent wants a unique flag id per stateful element)
-local _flagN = 0
-local function nextFlag(prefix)
-    _flagN = _flagN + 1
-    return "PTHUB_" .. (prefix or "F") .. "_" .. _flagN
-end
-
--- normalize an icon string to something the GUI accepts.
--- Fluent accepts rbxassetid:// and prefix/name packs. Bare lucide names
--- ("Info","locate","waves","tent") are mapped to the lucide/ pack.
-local function fixIcon(icon)
-    if type(icon) ~= "string" or icon == "" then return icon end
-    if icon:find("://") or icon:find("/") then return icon end
-    return "lucide/" .. icon:lower()
-end
-
--- Source mixes (Name=) and (Title=) keys.
--- Accept either, and never pass nil (the GUI errors on a missing Title).
-local function titleOf(o)
-    local t = o.Name or o.Title or o.Text or ""
-    return tostring(t)
-end
-
--- ---- Tab wrapper -----------------------------------------------------
-local Tab = {}
-Tab.__index = Tab
-
-local function wrapTab(fluentTab)
-    return setmetatable({ _t = fluentTab }, Tab)
-end
-
--- container = a tab OR a section; both share the Add* methods.
-local function bindContainer(self)
-    return self._sec or self._t
-end
-
-function Tab:AddSection(name)
-    local sec = self._t:AddSection(tostring(name or ""))
-    return setmetatable({ _t = self._t, _sec = sec }, Tab)
-end
-
-function Tab:AddParagraph(title, desc)
-    -- positional (Title, Desc); returns obj with :SetDesc
-    local p = bindContainer(self):AddParagraph({
-        Title = tostring(title or ""),
-        Content = tostring(desc or ""),
-    })
-    local wrapped = {}
-    function wrapped:SetDesc(text)
-        if p.SetDesc then p:SetDesc(tostring(text))
-        elseif p.SetContent then p:SetContent(tostring(text))
-        elseif p.SetValue then p:SetValue(tostring(text)) end
-    end
-    function wrapped:SetTitle(text)
-        if p.SetTitle then p:SetTitle(tostring(text)) end
-    end
-    return wrapped
-end
-
-function Tab:AddButton(o)
-    return bindContainer(self):AddButton({
-        Title = titleOf(o),
-        Description = o.Description,
-        Icon = fixIcon(o.Icon),
-        Callback = o.Callback or function() end,
-    })
-end
-
-function Tab:AddToggle(o)
-    local flag = o.Flag or nextFlag("T")
-    local tgl = bindContainer(self):AddToggle(flag, {
-        Title = titleOf(o),
-        Description = o.Description,
-        Default = o.Default or false,
-        Callback = o.Callback or function() end,
-    })
-    -- compat: :Set(bool)
-    local wrapped = { _tgl = tgl, Flag = flag }
+    track.MouseEnter:Connect(function() Hover(true) end)
+    track.MouseLeave:Connect(function() Hover(false) end)
+    local wrapped = { _row = row, Flag = flag }
     function wrapped:Set(v)
-        if tgl.SetValue then tgl:SetValue(v and true or false)
-        elseif tgl.Set then tgl:Set(v and true or false) end
+      state = IsOn(v)
+      ApplyState(true)
     end
     function wrapped:Get()
-        return tgl.Value
+      return state
     end
     return wrapped
-end
+  end
 
-function Tab:AddSlider(o)
-    local flag = o.Flag or nextFlag("S")
-    local rounding = o.Rounding
-    if rounding == nil then
-        -- treat integer increment as 0 decimals
-        rounding = (o.Increment and o.Increment >= 1) and 0 or 0
+  -- ---------- BUTTON ----------
+  function Container:AddButton(o)
+    local title = o.Name or o.Title or "Button"
+    local cb = o.Callback or function() end
+    local row = MakeRow(self.Scroll, 36)
+    local btn = Instance.new("TextButton", row)
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = ""
+    btn.AutoButtonColor = false
+    local uiscale = Instance.new("UIScale", btn)
+    uiscale.Scale = 1
+    local glow = MakeGradient(row, T.blue, T.purple, 0, 10)
+    glow.Size = UDim2.new(1, 0, 1, 0)
+    glow.Position = UDim2.new(0, 0, 0, 0)
+    glow.ZIndex = 0
+    RoundRect(glow, 10)
+    local label = Instance.new("TextLabel", btn)
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = title
+    label.TextColor3 = T.text
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 13
+    if o.Description and o.Description ~= "" then BindTip(btn, o.Description) end
+    btn.MouseEnter:Connect(function()
+      TweenService:Create(uiscale, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1.045 }):Play()
+      TweenService:Create(glow, TweenInfo.new(0.16), { BackgroundTransparency = 1 - 0.5 }):Play()
+      TweenService:Create(label, TweenInfo.new(0.16), { TextColor3 = Color3.fromRGB(255, 255, 255) }):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+      TweenService:Create(uiscale, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+      TweenService:Create(glow, TweenInfo.new(0.16), { BackgroundTransparency = 1 }):Play()
+    end)
+    btn.MouseButton1Click:Connect(function()
+      pcall(cb)
+    end)
+    return { _row = row }
+  end
+
+  -- ---------- SLIDER ----------
+  function Container:AddSlider(o)
+    local min = o.Min or 0
+    local max = o.Max or 100
+    local inc = o.Increment or (o.Rounding == 0 and 1 or nil)
+    local default = o.Default or min
+    local cb = o.Callback or function() end
+    local value = default
+    local row = MakeRow(self.Scroll, 40)
+    local lab = RowLabel(row, o.Name or o.Title or "Slider", 190)
+    local valLbl = Instance.new("TextLabel", row)
+    valLbl.Size = UDim2.new(0, 60, 1, 0)
+    valLbl.Position = UDim2.new(0, 200, 0, 0)
+    valLbl.BackgroundTransparency = 1
+    valLbl.Text = tostring(default)
+    valLbl.TextColor3 = LerpC(T.blue, T.purple, 0.6)
+    valLbl.Font = Enum.Font.GothamBold
+    valLbl.TextSize = 12
+    valLbl.TextXAlignment = Enum.TextXAlignment.Right
+    -- slider
+    local sld = Instance.new("TextButton", row)
+    sld.Name = "Slider"
+    sld.Size = UDim2.new(1, -280, 0, 14)
+    sld.Position = UDim2.new(1, -270, 0.5, -7)
+    sld.BackgroundColor3 = T.track
+    sld.Text = ""
+    sld.AutoButtonColor = false
+    sld.BorderSizePixel = 0
+    RoundRect(sld, 7)
+    Stroke(sld, 0.12)
+    local fill = MakeGradient(sld, T.blue, T.purple, 1, 12)
+    fill.Size = UDim2.new(0, 0, 1, 0)
+    RoundRect(fill, 7)
+    local knob = Instance.new("Frame", sld)
+    knob.Name = "Knob"
+    knob.Size = UDim2.new(0, 16, 0, 16)
+    knob.Position = UDim2.new(0, -7, 0.5, -8)
+    knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    knob.BorderSizePixel = 0
+    RoundRect(knob, 8)
+    local kGlow = Instance.new("Frame", knob)
+    kGlow.Size = UDim2.new(1, 0, 1, 0)
+    kGlow.BackgroundTransparency = 0.4
+    kGlow.BackgroundColor3 = LerpC(T.blue, T.purple, 0.5)
+    RoundRect(kGlow, 8)
+
+    local function SetValue(v, fire)
+      value = math.clamp(v, min, max)
+      if inc then value = math.floor(value / inc + 0.5) * inc end
+      local pct = (max ~= min) and (value - min) / (max - min) or 0
+      fill.Size = UDim2.new(pct, 0, 1, 0)
+      knob.Position = UDim2.new(pct, -8, 0.5, -8)
+      valLbl.Text = tostring(value)
+      if fire then pcall(cb, value) end
     end
-    local sld = bindContainer(self):AddSlider(flag, {
-        Title = titleOf(o),
-        Description = o.Description,
-        Default = o.Default or o.Min or 0,
-        Min = o.Min or 0,
-        Max = o.Max or 100,
-        Rounding = rounding,
-        Callback = o.Callback or function() end,
-    })
-    local wrapped = { _sld = sld, Flag = flag }
+    SetValue(default, false)
+
+    local dragging = false
+    local function UpdateFromMouse()
+      local m = UserInputService:GetMouseLocation()
+      local abs = sld.AbsolutePosition
+      local w = sld.AbsoluteSize.X
+      local pct = (m.X - abs.X) / math.max(1, w)
+      pcall(function() SetValue(min + pct * (max - min), true) end)
+    end
+    sld.InputBegan:Connect(function(input)
+      if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        UpdateFromMouse()
+      end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+      if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+      end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+      if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        UpdateFromMouse()
+      end
+    end)
+    local wrapped = { _row = row }
     function wrapped:Set(v)
-        if sld.SetValue then sld:SetValue(v) end
+      SetValue(v, true)
     end
     return wrapped
-end
+  end
 
-function Tab:AddDropdown(o)
-    local flag = o.Flag or nextFlag("D")
-    local dd = bindContainer(self):AddDropdown(flag, {
-        Title = titleOf(o),
-        Description = o.Description,
-        Values = o.Options or {},
-        Default = o.Default,
-        Multi = false,
-        Callback = o.Callback or function() end,
-    })
-    local wrapped = { _dd = dd, Flag = flag }
+  -- ---------- DROPDOWN ----------
+  function Container:AddDropdown(o)
+    local options = o.Options or {}
+    local cb = o.Callback or function() end
+    local current = o.Default
+    local row = MakeRow(self.Scroll, 36)
+    local lab = RowLabel(row, o.Name or o.Title or "Dropdown", 190)
+    local btn = Instance.new("TextButton", row)
+    btn.Size = UDim2.new(1, -280, 0, 26)
+    btn.Position = UDim2.new(1, -270, 0.5, -13)
+    btn.BackgroundColor3 = T.track
+    btn.Text = ""
+    btn.AutoButtonColor = false
+    btn.BorderSizePixel = 0
+    RoundRect(btn, 8)
+    Stroke(btn, 0.15)
+    local valTxt = Instance.new("TextLabel", btn)
+    valTxt.Size = UDim2.new(1, -26, 1, 0)
+    valTxt.Position = UDim2.new(0, 10, 0, 0)
+    valTxt.BackgroundTransparency = 1
+    valTxt.Text = tostring(current or (options[1] or ""))
+    valTxt.TextColor3 = T.text
+    valTxt.Font = Enum.Font.Gotham
+    valTxt.TextSize = 12
+    valTxt.TextXAlignment = Enum.TextXAlignment.Left
+    valTxt.TextTruncate = Enum.TextTruncate.AtEnd
+    local chevron = Instance.new("TextLabel", btn)
+    chevron.Size = UDim2.new(0, 16, 1, 0)
+    chevron.Position = UDim2.new(1, -18, 0, 0)
+    chevron.BackgroundTransparency = 1
+    chevron.Text = "▾"
+    chevron.TextColor3 = T.sub
+    chevron.Font = Enum.Font.GothamBold
+    chevron.TextSize = 12
+
+    local PopupGui, PopupList, PopupPanel
+    local function ClosePopup()
+      if PopupGui then
+        pcall(function() PopupGui:Destroy() end)
+        PopupGui = nil
+      end
+    end
+
+    local function OpenPopup()
+      ClosePopup()
+      PopupGui = Instance.new("ScreenGui")
+      PopupGui.Name = "PTHUB_Popup"
+      PopupGui.ResetOnSpawn = false
+      PopupGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+      PopupGui.DisplayOrder = 2147483646
+      local ok = pcall(function() PopupGui.Parent = (gethui and gethui()) or CoreGui end)
+      if not ok or not PopupGui.Parent then pcall(function() PopupGui.Parent = LP:WaitForChild("PlayerGui") end) end
+      -- lớp chặn click bên ngoài
+      local blocker = Instance.new("TextButton", PopupGui)
+      blocker.Size = UDim2.new(1, 0, 1, 0)
+      blocker.BackgroundTransparency = 1
+      blocker.Text = ""
+      blocker.AutoButtonColor = false
+      blocker.MouseButton1Click:Connect(ClosePopup)
+      PopupPanel = Instance.new("Frame", PopupGui)
+      PopupPanel.Name = "Panel"
+      PopupPanel.BackgroundColor3 = T.panel2
+      PopupPanel.BackgroundTransparency = 0.06
+      PopupPanel.BorderSizePixel = 0
+      RoundRect(PopupPanel, 12)
+      Stroke(PopupPanel, 0.35, LerpC(T.blue, T.purple, 0.5))
+      local list = Instance.new("ScrollingFrame", PopupPanel)
+      list.Name = "List"
+      list.Size = UDim2.new(1, -8, 1, -8)
+      list.Position = UDim2.new(0, 4, 0, 4)
+      list.BackgroundTransparency = 1
+      list.BorderSizePixel = 0
+      list.ScrollBarThickness = 3
+      local layout = Instance.new("UIListLayout", list)
+      layout.Padding = UDim.new(0, 2)
+      layout.SortOrder = Enum.SortOrder.LayoutOrder
+      local maxH = math.min(320, 8 + #options * 30 + 8)
+      PopupPanel.Size = UDim2.new(0, math.min(320, 140 + 14 * 8), 0, maxH)
+      local abs = btn.AbsolutePosition
+      PopupPanel.Position = UDim2.fromOffset(abs.X, abs.Y + 30)
+      for _, opt in ipairs(options) do
+        local ob = Instance.new("TextButton", list)
+        ob.Size = UDim2.new(1, 0, 0, 26)
+        ob.BackgroundTransparency = 1
+        ob.Text = "  " .. tostring(opt)
+        ob.TextColor3 = (opt == current) and LerpC(T.blue, T.purple, 0.55) or T.text
+        ob.Font = Enum.Font.Gotham
+        ob.TextSize = 12
+        ob.TextXAlignment = Enum.TextXAlignment.Left
+        ob.AutoButtonColor = false
+        ob.MouseEnter:Connect(function()
+          TweenService:Create(ob, TweenInfo.new(0.12), { BackgroundTransparency = 1 - 0.12 }):Play()
+        end)
+        ob.MouseLeave:Connect(function()
+          TweenService:Create(ob, TweenInfo.new(0.12), { BackgroundTransparency = 1 }):Play()
+        end)
+        ob.MouseButton1Click:Connect(function()
+          current = opt
+          valTxt.Text = tostring(opt)
+          ClosePopup()
+          pcall(cb, opt)
+        end)
+      end
+      -- fade in
+      local g = PopupPanel
+      g.GroupTransparency = 1
+      TweenService:Create(g, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 }):Play()
+    end
+
+    btn.MouseButton1Click:Connect(OpenPopup)
+
+    if current ~= nil then
+      pcall(cb, current)
+    end
+
+    local wrapped = { _row = row }
     function wrapped:Set(v)
-        if dd.SetValue then dd:SetValue(v) end
+      current = v
+      valTxt.Text = tostring(v)
+      pcall(cb, v)
     end
-    function wrapped:Refresh(opts, keep)
-        if dd.SetValues then dd:SetValues(opts) end
+    function wrapped:Refresh(opts)
+      options = opts or {}
+      valTxt.Text = tostring(current or (options[1] or ""))
     end
-    -- "SetOptions" alias sometimes used
     wrapped.SetOptions = wrapped.Refresh
     return wrapped
-end
+  end
 
-function Tab:AddTextBox(o)
-    local flag = o.Flag or nextFlag("I")
-    return bindContainer(self):AddInput(flag, {
-        Title = titleOf(o),
-        Placeholder = o.Placeholder,
-        Default = o.Default,
-        Finished = o.ClearOnFocus and false or false,
-        Callback = o.Callback or function() end,
-    })
-end
+  -- ---------- TEXT INPUT ----------
+  function Container:AddTextBox(o)
+    local cb = o.Callback or function() end
+    local row = MakeRow(self.Scroll, 36)
+    local lab = RowLabel(row, o.Name or o.Title or "Input", 190)
+    local box = Instance.new("TextBox", row)
+    box.Size = UDim2.new(1, -280, 0, 26)
+    box.Position = UDim2.new(1, -270, 0.5, -13)
+    box.BackgroundColor3 = T.track
+    box.BackgroundTransparency = 0.2
+    box.BorderSizePixel = 0
+    box.Text = tostring(o.Default or "")
+    box.PlaceholderText = tostring(o.Placeholder or "")
+    box.PlaceholderColor3 = T.sub
+    box.TextColor3 = T.text
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 12
+    RoundRect(box, 8)
+    Stroke(box, 0.12)
+    local h = box
+    h.FocusLost:Connect(function(enterPressed)
+      pcall(cb, h.Text)
+    end)
+    return { _row = row }
+  end
 
-function Tab:AddDiscordInvite(o)
-    local code = o.Invite or ""
+  -- ---------- PARAGRAPH ----------
+  function Container:AddParagraph(title, desc)
+    local row = Instance.new("Frame", self.Scroll)
+    row.Size = UDim2.new(1, 0, 0, 0)
+    row.AutomaticSize = Enum.AutomaticSize.Y
+    row.BackgroundTransparency = 1
+    local layout = Instance.new("UIListLayout", row)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, 2)
+    local ttl = Instance.new("TextLabel", row)
+    ttl.Size = UDim2.new(1, -20, 0, 18)
+    ttl.Position = UDim2.new(0, 14, 0, 0)
+    ttl.AutomaticSize = Enum.AutomaticSize.Y
+    ttl.BackgroundTransparency = 1
+    ttl.Text = tostring(title or "")
+    ttl.TextColor3 = LerpC(T.blue, T.purple, 0.5)
+    ttl.Font = Enum.Font.GothamBold
+    ttl.TextSize = 13
+    ttl.TextXAlignment = Enum.TextXAlignment.Left
+    ttl.TextWrapped = true
+    local body = Instance.new("TextLabel", row)
+    body.Size = UDim2.new(1, -24, 0, 16)
+    body.Position = UDim2.new(0, 12, 0, 20)
+    body.AutomaticSize = Enum.AutomaticSize.Y
+    body.BackgroundTransparency = 1
+    body.Text = tostring(desc or "")
+    body.TextColor3 = T.sub
+    body.Font = Enum.Font.Gotham
+    body.TextSize = 11
+    body.TextXAlignment = Enum.TextXAlignment.Left
+    body.TextWrapped = true
+    local wrapped = { _row = row }
+    function wrapped:SetDesc(text)
+      pcall(function() body.Text = tostring(text) end)
+    end
+    function wrapped:SetTitle(text)
+      pcall(function() ttl.Text = tostring(text) end)
+    end
+    function wrapped:SetContent(text)
+      pcall(function() body.Text = tostring(text) end)
+    end
+    return wrapped
+  end
+
+  -- ---------- DIVIDER / DISCORD / LABEL ----------
+  function Container:AddDivider()
+    local line = Instance.new("Frame", self.Scroll)
+    line.Size = UDim2.new(1, -24, 0, 1)
+    line.Position = UDim2.new(0, 12, 0, 0)
+    line.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    line.BackgroundTransparency = 0.85
+    line.BorderSizePixel = 0
+  end
+
+  function Container:AddDiscordInvite(o)
+    local code = tostring(o.Invite or "")
     code = code:gsub("https://discord%.gg/", ""):gsub("https://discord%.com/invite/", "")
-    local ok = pcall(function()
-        bindContainer(self):AddDiscord({ InviteCode = code })
-    end)
-    if not ok then
-        bindContainer(self):AddParagraph({
-            Title = o.Title or "Discord",
-            Content = (o.Description or "") .. "\nInvite: " .. (o.Invite or ""),
-        })
-    end
-end
-
--- passthrough extras that may appear
-function Tab:AddDivider()  return bindContainer(self):AddDivider() end
-function Tab:AddInput(o)    return self:AddTextBox(o) end
-function Tab:AddLabel(t)    return self:AddParagraph(t, "") end
-
--- ---- Window wrapper --------------------------------------------------
-local WindowWrap = {}
-WindowWrap.__index = WindowWrap
-
-function WindowWrap:MakeTab(o)
-    return wrapTab(self._w:AddTab({
-        Title = o.Title,
-        Icon = fixIcon(o.Icon),
-    }))
-end
-
-function WindowWrap:Notify(o)
-    Fluent:Notify({
-        Title = o.Title,
-        Content = o.Content,
-        SubContent = o.SubContent,
-        Type = o.Type or "Info",
-        Icon = fixIcon(o.Icon or o.Image),
-        Duration = o.Duration or 3,
+    self:AddButton({
+      Name = o.Title or ("Discord: " .. code),
+      Description = o.Description or "Mở liên kết Discord",
+      Callback = function()
+        pcall(setclipboard, code)
+        PushToast("Discord", "Đã copy invite: " .. code, 3)
+      end,
     })
-end
+  end
 
+  function Container:AddLabel(text)
+    return self:AddParagraph(text, "")
+  end
 
-function WindowWrap:SelectTab(i) if self._w.SelectTab then self._w:SelectTab(i) end end
-function WindowWrap:Show() if self._w.Show then self._w:Show() end end
-function WindowWrap:Hide() if self._w.Hide then self._w:Hide() end end
+  function Container:AddInput(o)
+    return self:AddTextBox(o)
+  end
 
--- PT HUB floating open/close GUI button.
--- Rotating background image + static icon, draggable, hold 1s to lock,
--- click plays a sound and toggles the window.
-function WindowWrap:BuildFloatingButton()
-    if self._floatBuilt then return end
-    self._floatBuilt = true
+  -- ---------- SECTION ----------
+  function Container:AddSection(name)
+    local head = Instance.new("Frame", self.Scroll)
+    head.Size = UDim2.new(1, 0, 0, 28)
+    head.BackgroundTransparency = 1
+    local bar = MakeGradient(head, T.blue, T.purple, 1, 6)
+    bar.Size = UDim2.new(0, 3, 0, 14)
+    bar.Position = UDim2.new(0, 2, 0.5, -7)
+    RoundRect(bar, 2)
+    local lab = Instance.new("TextLabel", head)
+    lab.Size = UDim2.new(1, -24, 1, 0)
+    lab.Position = UDim2.new(0, 14, 0, 0)
+    lab.BackgroundTransparency = 1
+    lab.Text = string.upper(tostring(name or "SECTION"))
+    lab.TextColor3 = T.sub
+    lab.Font = Enum.Font.GothamBold
+    lab.TextSize = 12
+    lab.TextXAlignment = Enum.TextXAlignment.Left
+    lab.TextTruncate = Enum.TextTruncate.AtEnd
+    -- section tiếp tục chèn vào cùng scroll
+    return setmetatable({ Scroll = self.Scroll }, Container)
+  end
 
-    local toggleGui = Instance.new("ScreenGui")
-    toggleGui.Name = "OpenUi"
-    toggleGui.ResetOnSpawn = false
-    toggleGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    toggleGui.IgnoreGuiInset = false
-    toggleGui.DisplayOrder = 2147483647
-    -- parent safely (some executors need CoreGui / gethui)
-    local parented = false
+  -- ============ WINDOW ============
+  local WindowWrap = {}
+  WindowWrap.__index = WindowWrap
+
+  local TabWrap = {}
+  TabWrap.__index = TabWrap
+  function TabWrap:AddSection(n) return setmetatable({ Scroll = self._scroll }, Container):AddSection(n) end
+  function TabWrap:AddParagraph(t, d) return setmetatable({ Scroll = self._scroll }, Container):AddParagraph(t, d) end
+  function TabWrap:AddButton(o) return setmetatable({ Scroll = self._scroll }, Container):AddButton(o) end
+  function TabWrap:AddToggle(o) return setmetatable({ Scroll = self._scroll }, Container):AddToggle(o) end
+  function TabWrap:AddSlider(o) return setmetatable({ Scroll = self._scroll }, Container):AddSlider(o) end
+  function TabWrap:AddDropdown(o) return setmetatable({ Scroll = self._scroll }, Container):AddDropdown(o) end
+  function TabWrap:AddTextBox(o) return setmetatable({ Scroll = self._scroll }, Container):AddTextBox(o) end
+  function TabWrap:AddDiscordInvite(o) return setmetatable({ Scroll = self._scroll }, Container):AddDiscordInvite(o) end
+  function TabWrap:AddDivider() return setmetatable({ Scroll = self._scroll }, Container):AddDivider() end
+  function TabWrap:AddInput(o) return setmetatable({ Scroll = self._scroll }, Container):AddInput(o) end
+  function TabWrap:AddLabel(t) return setmetatable({ Scroll = self._scroll }, Container):AddLabel(t) end
+
+  local ICON_MAP = {
+    ["Tab Info And Status"] = "ℹ",
+    ["Tab GUI Settings"] = "🎨",
+    ["Tab Farming"] = "⚔",
+    ["Tab Setting"] = "⚙",
+    ["Tab Fishing"] = "🎣",
+    ["Tab Quest And Item"] = "📜",
+    ["Tab Sea Event"] = "🌊",
+    ["Tab Mirage And Race"] = "🌀",
+    ["Tab Volcano Event"] = "🌋",
+    ["Tab Stats And Esp"] = "👁",
+    ["Tab Fruit And Raid"] = "🍎",
+    ["Tab Local Player"] = "🥊",
+    ["Tab Teleport"] = "🧭",
+    ["Tab Shopping"] = "🛒",
+    ["Tab Miscellaneous"] = "🧩",
+  }
+
+  -- helper đặt active cho nút nav (khai báo sau vòng lặp)
+  local function SetActiveF(navBtn, tab, active)
+    local grad = navBtn:FindFirstChild("Gradient") or navBtn:FindFirstChildOfClass("Frame")
     pcall(function()
-        toggleGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
-        parented = true
+      for _, ch in ipairs(navBtn:GetChildren()) do
+        if ch:IsA("Frame") then
+          if ch:FindFirstChildOfClass("Frame") or ch:GetChildren()[1] and ch:GetChildren()[1]:IsA("Frame") then
+            ch.Visible = active
+          end
+        end
+        if ch:IsA("TextLabel") then
+          ch.TextColor3 = active and Color3.fromRGB(255, 255, 255) or T.sub
+        end
+        if ch.Name == "AccentBar" then ch.Visible = active end
+      end
     end)
-    if not parented then
-        toggleGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+  end
+
+  function WindowWrap:MakeTab(o)
+    local title = tostring(o.Title or "Tab")
+    local icon = ICON_MAP[title] or "•"
+    local self_w = self
+    -- holder + scroll cho tab mới
+    local holder = Instance.new("Frame", self.ContentArea)
+    holder.Name = "Tab_" .. title
+    holder.Size = UDim2.new(1, 0, 1, 0)
+    holder.BackgroundTransparency = 1
+    holder.Visible = false
+    local scroll = Instance.new("ScrollingFrame", holder)
+    scroll.Size = UDim2.new(1, -8, 1, -8)
+    scroll.Position = UDim2.new(0, 4, 0, 4)
+    scroll.BackgroundTransparency = 1
+    scroll.BorderSizePixel = 0
+    scroll.ScrollBarThickness = 4
+    scroll.ScrollBarImageColor3 = LerpC(T.blue, T.purple, 0.5)
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    local layout = Instance.new("UIListLayout", scroll)
+    layout.Padding = UDim.new(0, 6)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    -- nút nav
+    local navBtn = Instance.new("TextButton", self.NavList)
+    navBtn.Name = "Nav_" .. title
+    navBtn.Size = UDim2.new(1, 0, 0, 42)
+    navBtn.BackgroundTransparency = 1
+    navBtn.Text = ""
+    navBtn.AutoButtonColor = false
+    navBtn.BorderSizePixel = 0
+    RoundRect(navBtn, 10)
+    local grad = MakeGradient(navBtn, T.blue, T.purple, 1, 10)
+    grad.Size = UDim2.new(1, 0, 1, 0)
+    grad.Visible = false
+    RoundRect(grad, 10)
+    local barL = Instance.new("Frame", navBtn)
+    barL.Name = "AccentBar"
+    barL.Size = UDim2.new(0, 3, 0, 22)
+    barL.Position = UDim2.new(0, 0, 0.5, -11)
+    barL.BackgroundColor3 = T.cyan
+    barL.BorderSizePixel = 0
+    barL.Visible = false
+    RoundRect(barL, 2)
+    local ic = Instance.new("TextLabel", navBtn)
+    ic.Size = UDim2.new(0, 30, 1, 0)
+    ic.Position = UDim2.new(0, 10, 0, 0)
+    ic.BackgroundTransparency = 1
+    ic.Text = icon
+    ic.TextColor3 = T.sub
+    ic.Font = Enum.Font.Gotham
+    ic.TextSize = 17
+    ic.TextXAlignment = Enum.TextXAlignment.Center
+    local tl = Instance.new("TextLabel", navBtn)
+    tl.Size = UDim2.new(1, -46, 1, 0)
+    tl.Position = UDim2.new(0, 42, 0, 0)
+    tl.BackgroundTransparency = 1
+    tl.Text = title:gsub("^Tab ", "")
+    tl.TextColor3 = T.sub
+    tl.Font = Enum.Font.Gotham
+    tl.TextSize = 13
+    tl.TextXAlignment = Enum.TextXAlignment.Left
+    tl.TextTruncate = Enum.TextTruncate.AtEnd
+
+    local function SetActive(active)
+      if active then
+        grad.Visible = true
+        barL.Visible = true
+        tl.TextColor3 = Color3.fromRGB(255, 255, 255)
+        ic.TextColor3 = Color3.fromRGB(255, 255, 255)
+      else
+        grad.Visible = false
+        barL.Visible = false
+        tl.TextColor3 = T.sub
+        ic.TextColor3 = T.sub
+      end
     end
 
-    local mainBtn = Instance.new("TextButton")
-    mainBtn.Name = "OpenButton"
-    mainBtn.Parent = toggleGui
-    mainBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    mainBtn.BackgroundTransparency = 1
-    mainBtn.Position = UDim2.new(0.101969875, 0, 0.110441767, 0)
-    mainBtn.Size = UDim2.new(0, 64, 0, 42)
-    mainBtn.Text = ""
-    mainBtn.AutoButtonColor = false
-    mainBtn.Visible = true
-    Instance.new("UICorner", mainBtn)
+    -- khai báo TRƯỚC khi dùng trong closure (Luau: forward local = nil)
+    local wrapped = setmetatable({ _scroll = scroll, _holder = holder, _nav = navBtn, Title = title, _t = { Scroll = scroll } }, TabWrap)
+    table.insert(self_w.Tabs, wrapped)
 
-    local sizeBackMulti = 0.3
-
-    local backgroundImage = Instance.new("ImageLabel")
-    backgroundImage.Name = "RotatingBackground"
-    backgroundImage.Parent = mainBtn
-    backgroundImage.Size = UDim2.new(2.3 + sizeBackMulti, 0, 2.3 + sizeBackMulti, 0)
-    backgroundImage.Position = UDim2.new(0.5, 0, 0.5, 0)
-    backgroundImage.AnchorPoint = Vector2.new(0.5, 0.5)
-    backgroundImage.BackgroundTransparency = 1
-    backgroundImage.Image = "rbxassetid://109694296016043"
-    backgroundImage.SizeConstraint = Enum.SizeConstraint.RelativeXX
-
-    local frontImage = Instance.new("ImageLabel")
-    frontImage.Name = "StaticIcon"
-    frontImage.Parent = mainBtn
-    frontImage.Size = UDim2.fromOffset(55, 55)
-    frontImage.Position = UDim2.new(0.5, 0, 0.5, 0)
-    frontImage.AnchorPoint = Vector2.new(0.5, 0.5)
-    frontImage.BackgroundTransparency = 1
-    frontImage.Image = "rbxassetid://75841821715476"
-    frontImage.ZIndex = 1
-    Instance.new("UICorner", frontImage).CornerRadius = UDim.new(0.2, 0)
-
-    local rotation = 0
-    local rotSpeed = 90
-    local lastTime = tick()
-    task.spawn(function()
-        while toggleGui.Parent do
-            local now = tick()
-            local delta = now - lastTime
-            lastTime = now
-            rotation = (rotation + rotSpeed * delta) % 360
-            backgroundImage.Rotation = rotation
-            task.wait()
-        end
+    navBtn.MouseButton1Click:Connect(function()
+      for i, tb in ipairs(self_w.Tabs) do
+        if tb == wrapped then self_w:SelectTab(i) break end
+      end
+    end)
+    navBtn.MouseEnter:Connect(function()
+      TweenService:Create(tl, TweenInfo.new(0.15), { TextColor3 = T.text }):Play()
+    end)
+    navBtn.MouseLeave:Connect(function()
+      if not self_w.ActiveTab or self_w.ActiveTab ~= wrapped then
+        TweenService:Create(tl, TweenInfo.new(0.15), { TextColor3 = T.sub }):Play()
+      end
     end)
 
-    -- draggable + hold-to-lock
-    local function MakeDraggableOpenUi(topbar, obj)
-        local dragging, dragInput, dragStart, startPos = false, nil, nil, nil
-        local holdingDrag, holdToken = false, 0
-        obj:SetAttribute("Locked", false)
-        local function Update(input)
-            if obj:GetAttribute("Locked") then return end
-            local delta = input.Position - dragStart
-            obj.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        end
-        local function ToggleLock()
-            local newState = not obj:GetAttribute("Locked")
-            obj:SetAttribute("Locked", newState)
-            Fluent:Notify({ Title = newState and "Locked" or "Unlocked", Content = newState and "Locked in place" or "Can be moved", Duration = 2 })
-        end
-        topbar.InputBegan:Connect(function(input)
-            if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
-            dragging = not obj:GetAttribute("Locked")
-            holdingDrag = true
-            dragStart = input.Position
-            startPos = obj.Position
-            holdToken = holdToken + 1
-            local token = holdToken
-            task.delay(1.0, function()
-                if holdingDrag and token == holdToken then ToggleLock() end
-            end)
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                    holdingDrag = false
-                end
-            end)
-        end)
-        topbar.InputChanged:Connect(function(input)
-            if not dragStart then return end
-            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-                if (input.Position - dragStart).Magnitude > 6 then holdingDrag = false end
-                dragInput = input
-            end
-        end)
-        UserInputService.InputChanged:Connect(function(input)
-            if input == dragInput and dragging then Update(input) end
-        end)
+    -- tab đầu tiên được chọn sẵn (nội dung hiện ngay khi mở)
+    if #self_w.Tabs == 1 then
+      holder.Visible = true
+      holder.GroupTransparency = 0
+      SetActiveF(navBtn, wrapped, true)
+      self_w.ActiveTab = wrapped
     end
-    MakeDraggableOpenUi(mainBtn, mainBtn)
+    return wrapped
+  end
 
-    local uiOpen = true
-    local function PlaySound(soundId)
-        pcall(function()
-            local sound = Instance.new("Sound")
-            sound.SoundId = "rbxassetid://" .. soundId
-            sound.Parent = game:GetService("SoundService")
-            sound:Play()
-            sound.Ended:Connect(function() sound:Destroy() end)
-        end)
+  function WindowWrap:SelectTab(index)
+    local tb = self.Tabs[index]
+    if not tb then return end
+    for i, other in ipairs(self.Tabs) do
+      local active = (other == tb)
+      pcall(function()
+        other._holder.Visible = active
+        if other._nav then SetActiveF(other._nav, other, active) end
+      end)
     end
-
-    mainBtn.MouseButton1Click:Connect(function()
-        local sounds = { "7127123605", "438666542" }
-        PlaySound(sounds[math.random(#sounds)])
-        uiOpen = not uiOpen
-        if uiOpen then self:Show() else self:Hide() end
-
-        local function SmoothSpeed(target, dur)
-            local start = rotSpeed
-            local steps = 30
-            for i = 1, steps do
-                rotSpeed = start + (target - start) * (i / steps)
-                task.wait(dur / steps)
-            end
-            rotSpeed = target
-        end
-        task.spawn(function()
-            SmoothSpeed(360, 0.4); task.wait(0.5)
-            SmoothSpeed(180, 0.4); task.wait(0.3)
-            SmoothSpeed(90, 0.4)
-        end)
+    -- animation: holder hiện ra với fade + slide nhẹ
+    pcall(function()
+      tb._holder.GroupTransparency = 1
+      tb._holder.Position = UDim2.new(0.015, 0, 0, 0)
+      TweenService:Create(tb._holder, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0, Position = UDim2.new(0, 0, 0, 0) }):Play()
     end)
+    self.ActiveTab = tb
+  end
 
-    self._floatingGui = toggleGui
-    return mainBtn
-end
 
--- Minimizer: the GUI already minimizes with MinimizeKey. Provide stub objects
--- so the minimizer calls stay valid; the real open/close button is
--- the custom PT HUB floating button built inside MakeWindow.
-function WindowWrap:NewMinimizer(_)
+  function WindowWrap:Notify(o)
+    PushToast(o.Title or "PT HUB", o.Content or o.SubContent or "", o.Duration or 3)
+  end
+
+  function WindowWrap:Show()
+    pcall(function()
+      self.Main.Visible = true
+      self.Floating.Visible = false
+      SetBlur(true)
+      TweenService:Create(self.Main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 }):Play()
+    end)
+  end
+
+  function WindowWrap:Hide()
+    pcall(function()
+      self.Floating.Visible = true
+      TweenService:Create(self.Main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { GroupTransparency = 1 }):Play()
+      task.delay(0.2, function()
+        if self.Main then self.Main.Visible = false end
+      end)
+      SetBlur(false)
+    end)
+  end
+
+  function WindowWrap:SetTheme(name)
+    PushToast("Theme", "Đã áp theme: " .. tostring(name), 2)
+  end
+
+  function WindowWrap:NewMinimizer(_)
     local self_ref = self
     local m = {}
     function m:CreateMobileMinimizer(_)
-        self_ref:BuildFloatingButton()
-        return {}
+      self_ref:BuildFloatingButton()
+      return {}
     end
     return m
-end
+  end
 
--- ---- PT HUB GUI entry point --------------------------------------------
-local PtLib = {}
-function PtLib:MakeWindow(o)
-    -- PT HUB custom themes
-    pcall(function()
-        Fluent:RegisterCustomTheme("NeonBlue", {
-            Accent = Color3.fromRGB(0, 180, 255), AcrylicMain = Color3.fromRGB(10, 14, 28),
-            Text = Color3.fromRGB(230, 245, 255), SubText = Color3.fromRGB(120, 170, 220),
-            ToggleToggled = Color3.fromRGB(0, 180, 255),
-        })
+  function WindowWrap:BuildFloatingButton()
+    if self._floatBuilt then return end
+    self._floatBuilt = true
+    local fg = Instance.new("ScreenGui")
+    fg.Name = "PTHUB_Float"
+    fg.ResetOnSpawn = false
+    fg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    fg.DisplayOrder = 2147483646
+    local ok = pcall(function() fg.Parent = (gethui and gethui()) or CoreGui end)
+    if not ok or not fg.Parent then pcall(function() fg.Parent = LP:WaitForChild("PlayerGui") end) end
+    local pill = Instance.new("TextButton", fg)
+    pill.Name = "Pill"
+    pill.Size = UDim2.new(0, 118, 0, 38)
+    pill.Position = UDim2.new(0.5, -59, 0.92, -19)
+    pill.BackgroundColor3 = T.panel2
+    pill.BackgroundTransparency = 0.08
+    pill.Text = ""
+    pill.AutoButtonColor = false
+    pill.BorderSizePixel = 0
+    RoundRect(pill, 19)
+    Stroke(pill, 0.35, LerpC(T.blue, T.purple, 0.5))
+    local dot = MakeGradient(pill, T.blue, T.purple, 1, 8)
+    dot.Size = UDim2.new(0, 12, 0, 12)
+    dot.Position = UDim2.new(0, 12, 0.5, -6)
+    RoundRect(dot, 6)
+    local txt = Instance.new("TextLabel", pill)
+    txt.Size = UDim2.new(1, -36, 1, 0)
+    txt.Position = UDim2.new(0, 30, 0, 0)
+    txt.BackgroundTransparency = 1
+    txt.Text = "PT HUB"
+    txt.TextColor3 = T.text
+    txt.Font = Enum.Font.GothamBold
+    txt.TextSize = 13
+    txt.TextXAlignment = Enum.TextXAlignment.Left
+    pill.Visible = false
+    pill.MouseButton1Click:Connect(function()
+      self:Show()
+    end)
+    self.Floating = pill
+    -- kéo nút nổi
+    local function dragStart() end
+    local dragging, dStart = false
+    pill.InputBegan:Connect(function(input)
+      if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dStart = input.Position
+      end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+      if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+      end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+      if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dStart
+        dStart = input.Position
+        pill.Position = pill.Position + UDim2.new(0, delta.X, 0, delta.Y)
+      end
+    end)
+    self._floatGui = fg
+  end
+
+  -- ============ MAKE WINDOW ============
+  function PtLib_MakeWindow(o)
+    local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
+    local winW, winH = 780, 560
+    local useScale = viewport.X < 900 or viewport.Y < 700
+    if useScale then
+      winW, winH = 0, 0
+    end
+
+    local w = setmetatable({ Tabs = {}, ActiveTab = nil, Main = nil, NavList = nil, ContentArea = nil }, WindowWrap)
+
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "PTHUB_Neo"
+    sg.ResetOnSpawn = false
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    sg.DisplayOrder = 2147483646
+    local ok = pcall(function() sg.Parent = (gethui and gethui()) or CoreGui end)
+    if not ok or not sg.Parent then pcall(function() sg.Parent = LP:WaitForChild("PlayerGui") end) end
+
+    local main = Instance.new("Frame", sg)
+    main.Name = "Main"
+    main.BackgroundColor3 = T.panel
+    main.BackgroundTransparency = 0.08
+    main.BorderSizePixel = 0
+    RoundRect(main, 16)
+    Stroke(main, 0.16)
+    if useScale then
+      main.Size = UDim2.fromScale(0.94, 0.9)
+      main.AnchorPoint = Vector2.new(0.5, 0.5)
+      main.Position = UDim2.fromScale(0.5, 0.5)
+    else
+      main.Size = UDim2.fromOffset(winW, winH)
+      main.Position = UDim2.fromOffset((viewport.X - winW) / 2, (viewport.Y - winH) / 2)
+    end
+
+    -- ===== title bar =====
+    local titleBar = Instance.new("Frame", main)
+    titleBar.Name = "TitleBar"
+    titleBar.Size = UDim2.new(1, -28, 0, 40)
+    titleBar.Position = UDim2.new(0, 14, 0, 10)
+    titleBar.BackgroundTransparency = 1
+    local logo = MakeGradient(titleBar, T.blue, T.purple, 1, 8)
+    logo.Size = UDim2.new(0, 12, 0, 12)
+    logo.Position = UDim2.new(0, 0, 0.5, -6)
+    RoundRect(logo, 6)
+    local t1 = Instance.new("TextLabel", titleBar)
+    t1.Size = UDim2.new(0, 120, 0, 20)
+    t1.Position = UDim2.new(0, 20, 0, 2)
+    t1.BackgroundTransparency = 1
+    t1.Text = "PT HUB"
+    t1.TextColor3 = T.text
+    t1.Font = Enum.Font.GothamBold
+    t1.TextSize = 17
+    t1.TextXAlignment = Enum.TextXAlignment.Left
+    local t2 = Instance.new("TextLabel", titleBar)
+    t2.Size = UDim2.new(0, 220, 0, 16)
+    t2.Position = UDim2.new(0, 20, 0, 22)
+    t2.BackgroundTransparency = 1
+    t2.Text = "Blox Fruits  •  Maru-style Neo UI"
+    t2.TextColor3 = T.sub
+    t2.Font = Enum.Font.Gotham
+    t2.TextSize = 11
+    t2.TextXAlignment = Enum.TextXAlignment.Left
+    -- nút thu nhỏ / đóng
+    local minBtn = Instance.new("TextButton", titleBar)
+    minBtn.Size = UDim2.new(0, 30, 0, 30)
+    minBtn.Position = UDim2.new(1, -66, 0, 5)
+    minBtn.BackgroundTransparency = 1
+    minBtn.Text = "—"
+    minBtn.TextColor3 = T.sub
+    minBtn.Font = Enum.Font.GothamBold
+    minBtn.TextSize = 16
+    minBtn.AutoButtonColor = false
+    RoundRect(minBtn, 8)
+    minBtn.MouseButton1Click:Connect(function() w:Hide() end)
+    minBtn.MouseEnter:Connect(function() TweenService:Create(minBtn, TweenInfo.new(0.12), { BackgroundTransparency = 1 - 0.12 }):Play() end)
+    minBtn.MouseLeave:Connect(function() TweenService:Create(minBtn, TweenInfo.new(0.12), { BackgroundTransparency = 1 }):Play() end)
+    local closeBtn = Instance.new("TextButton", titleBar)
+    closeBtn.Size = UDim2.new(0, 30, 0, 30)
+    closeBtn.Position = UDim2.new(1, -32, 0, 5)
+    closeBtn.BackgroundTransparency = 1
+    closeBtn.Text = "✕"
+    closeBtn.TextColor3 = T.sub
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.TextSize = 15
+    closeBtn.AutoButtonColor = false
+    RoundRect(closeBtn, 8)
+    closeBtn.MouseButton1Click:Connect(function()
+      pcall(function()
+        sg:Destroy()
+      end)
+      SetBlur(false)
+    end)
+    closeBtn.MouseEnter:Connect(function()
+      TweenService:Create(closeBtn, TweenInfo.new(0.12), { TextColor3 = T.red, BackgroundTransparency = 1 - 0.12 }):Play()
+    end)
+    closeBtn.MouseLeave:Connect(function()
+      TweenService:Create(closeBtn, TweenInfo.new(0.12), { TextColor3 = T.sub, BackgroundTransparency = 1 }):Play()
     end)
 
-    local w = Fluent:CreateWindow({
-        Title = "PT HUB",
-        SubTitle = "IS BACK | created by PT",
-        Version = "release 1.5.5",
-        TabWidth = 130,
-        Size = UDim2.fromOffset(480, 460),
-        Acrylic = true,
-        Theme = "Blood Red",
-        MinimizeKey = Enum.KeyCode.LeftControl,
-        Search = true,
-        Icons = "solar/planet-bold",
-        UserInfoTop = true,
-        UserInfoTitle = "Welcome",
-        UserInfoSubtitle = LocalPlayer.DisplayName,
-        UserInfoColor = Color3.fromRGB(180, 10, 20),
-    })
-
-    pcall(function()
-        Fluent:SetErrorHandler(function(msg)
-            pcall(function()
-                Fluent:Notify({ Title = "Error", Content = tostring(msg), Type = "Error", Duration = 5 })
-            end)
-        end)
+    -- ===== drag =====
+    local dragging, dStart, dOrigin = false
+    titleBar.InputBegan:Connect(function(input)
+      if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dStart = input.Position
+        dOrigin = main.Position
+      end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+      if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+      end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+      if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dStart
+        main.Position = UDim2.new(dOrigin.X.Scale, dOrigin.X.Offset + delta.X, dOrigin.Y.Scale, dOrigin.Y.Offset + delta.Y)
+      end
     end)
 
-    local wrapped = setmetatable({ _w = w }, WindowWrap)
-    -- always create the floating open/close button
-    pcall(function() wrapped:BuildFloatingButton() end)
+    -- ===== nav (trái) =====
+    local nav = Instance.new("Frame", main)
+    nav.Name = "Nav"
+    nav.Size = UDim2.new(0, 186, 1, -64)
+    nav.Position = UDim2.new(0, 12, 0, 54)
+    nav.BackgroundColor3 = T.panel2
+    nav.BackgroundTransparency = 0.10
+    nav.BorderSizePixel = 0
+    RoundRect(nav, 12)
+    Stroke(nav, 0.10)
+    local navScroll = Instance.new("ScrollingFrame", nav)
+    navScroll.Name = "List"
+    navScroll.Size = UDim2.new(1, -12, 1, -8)
+    navScroll.Position = UDim2.new(0, 6, 0, 4)
+    navScroll.BackgroundTransparency = 1
+    navScroll.BorderSizePixel = 0
+    navScroll.ScrollBarThickness = 3
+    navScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    local navLayout = Instance.new("UIListLayout", navScroll)
+    navLayout.Padding = UDim.new(0, 4)
+    navLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
-    -- Fix the player-avatar in the UserInfo card. The GUI fetches it with
-    -- Players:GetUserThumbnailAsync which frequently returns "" on first load,
-    -- leaving the avatar blank. Force a reliable rbxthumb:// image (client
-    -- resolves it directly from the UserId) into the UserInfo ImageLabel(s).
-    task.spawn(function()
-        local uid = LocalPlayer.UserId
-        local thumb = "rbxthumb://type=AvatarHeadShot&id=" .. uid .. "&w=150&h=150"
-        local function collectRoots()
-            local roots = {}
-            pcall(function() if gethui then table.insert(roots, gethui()) end end)
-            pcall(function() table.insert(roots, game:GetService("CoreGui")) end)
-            pcall(function() table.insert(roots, LocalPlayer:FindFirstChild("PlayerGui")) end)
-            return roots
-        end
-        for attempt = 1, 20 do
-            local applied = false
-            pcall(function()
-                for _, root in ipairs(collectRoots()) do
-                    if root then
-                        for _, frame in ipairs(root:GetDescendants()) do
-                            if frame:IsA("Frame") and (frame.Name == "UserInfoTop" or frame.Name == "UserInfo") then
-                                for _, img in ipairs(frame:GetDescendants()) do
-                                    -- the avatar is the ImageLabel that has no ThemeTag icon color
-                                    -- (icons are tinted "SubText"); set any blank/thumb image.
-                                    if img:IsA("ImageLabel") then
-                                        local cur = img.Image or ""
-                                        if cur == "" or cur == "rbxassetid://0" or cur:find("rbxthumb") or cur:find("Thumbnail") then
-                                            img.Image = thumb
-                                            applied = true
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end)
-            if applied then break end
-            task.wait(0.5)
-        end
-    end)
+    -- ===== content (phải) =====
+    local content = Instance.new("Frame", main)
+    content.Name = "Content"
+    content.Size = UDim2.new(1, -216, 1, -70)
+    content.Position = UDim2.new(0, 206, 0, 56)
+    content.BackgroundTransparency = 1
 
-    return wrapped
+    w.Main = main
+    w.NavList = navScroll
+    w.ContentArea = content
+    w.ScreenGui = sg
+
+    -- entrance
+    main.GroupTransparency = 1
+    TweenService:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 }):Play()
+    SetBlur(true)
+
+    w:BuildFloatingButton()
+    return w
+  end
+
+  PtLib = {}
+  function PtLib:MakeWindow(o)
+    return PtLib_MakeWindow(o)
+  end
 end
 
 -- ================= PT HUB window bootstrap =================
--- FIX (Delta): toan bo phan GUI Fluent nam trong ham BuildFluentUI va duoc goi qua pcall.
--- Neu bat ky buoc dung UI nao loi (CreateWindow, AddTab, ...), pcall bat loi va
--- script tu dong chuyen sang fallback menu thay vi chet im.
-local BuildFluentUI = function()
+-- ================= PT HUB window bootstrap =================
+-- Giao dien PT HUB Neo (Maru-style) — duoc dung boi engine UI tu chua.
+-- Toan bo tinh nang phia duoi cau vao cung _G flag thong qua wrapper.
 local Window = PtLib:MakeWindow({
     Title = "PT HUB",
     SubTitle = "IS BACK",
@@ -14890,16 +14431,3 @@ Window:Notify({
   Image = "rbxassetid://75841821715476",
   Duration = 5
 })
-
-end -- BuildFluentUI
-
--- FIX (Delta): neu Fluent tai duoc nhung dung UI loi giua chung -> van ra fallback menu
-local _okUI = pcall(BuildFluentUI)
-if not _okUI then
-  warn("[PT HUB] Fluent UI build failed, using fallback menu")
-  pcall(function()
-    game:GetService("StarterGui"):SetCore("SendNotification",
-      { Title = "PT HUB", Text = "UI build error - fallback menu enabled.", Duration = 8 })
-  end)
-  BuildFallbackUI()
-end
