@@ -665,21 +665,82 @@ CheckLeviathan = function()
 end;
   return false
 end;
+-- ============================================================
+-- FIX: Auto Store Fruit không chạy trên bản Blox Fruits mới.
+--  1) Nhận diện trái cây: bản mới KHÔNG phải tool nào cũng có
+--     EatRemote khi nằm trong Backpack -> phải dựa thêm ToolTip
+--     ("Blox Fruit") và tên tool chứa "Fruit".
+--  2) Key StoreFruit phải đúng dạng "Name-Name": ưu tiên attribute
+--     OriginalName, fallback chuẩn hoá tên tool, xử lý đặc biệt
+--     "Human: Buddha" / "Bird: Phoenix" (bỏ phần "Human:"/"Bird:").
+--  3) Chống spam remote (nguyên nhân rate-limit âm thầm chặn mọi
+--     StoreFruit): mỗi loại trái cây chỉ gửi 1 lần mỗi 3 giây,
+--     và không gửi lại nếu tool đã biến mất (store thành công).
+-- ============================================================
+_G.PT_StoredFruits = _G.PT_StoredFruits or {}
+local FRUIT_STORE_COOLDOWN = 3
+
+local function NormalizeFruitKey(rawName)
+  if type(rawName) ~= "string" or rawName == "" then return nil end
+  local key = rawName
+  key = key:gsub("^%s+", ""):gsub("%s+$", "")  -- trim
+  key = key:gsub("%s*Fruit%s*$", "")           -- "Bomb Fruit" -> "Bomb"
+  key = key:gsub("^Human:%s*", "")             -- "Human: Buddha" -> "Buddha"
+  key = key:gsub("^Bird:%s*", "")              -- "Bird: Phoenix" -> "Phoenix"
+  key = key:gsub("%s+", " ")                   -- gộp khoảng trắng liên tiếp
+  if key == "" then return nil end
+  if key:find("-") then return key end         -- đã đúng dạng "Name-Name"
+  return key .. "-" .. key
+end
+
+local function GetFruitStoreKey(tool)
+  if not tool then return nil end
+  local attr = tool:GetAttribute("OriginalName")
+  if type(attr) == "string" and attr ~= "" and attr:find("-") then
+    return attr
+  end
+  local alt = tool:GetAttribute("FruitName") or tool:GetAttribute("Name")
+  local k = NormalizeFruitKey(alt)
+  if k then return k end
+  return NormalizeFruitKey(tool.Name)
+end
+
+local function IsFruitTool(tool)
+  if not tool or not tool:IsA("Tool") then return false end
+  if tool:FindFirstChild("EatRemote", true) then return true end
+  if tostring(tool.ToolTip) == "Blox Fruit" then return true end
+  return tostring(tool.Name):find("Fruit") ~= nil
+end
+
 UpdStFruit = function()
-  for _, x in pairs(plr.Backpack:GetChildren()) do
-    pcall(function()
-      if x:IsA("Tool") and x:FindFirstChild("EatRemote", true) then
-        -- Remote StoreFruit nhận TÊN trái cây dạng "Name-Name" (VD "Bomb-Bomb"),
-        -- không phải instance tool. Lấy từ attribute OriginalName, fallback tên tool.
-        local fruitName = x:GetAttribute("OriginalName")
-        if not fruitName or fruitName == "" then
-          local base = x.Name:gsub(" Fruit$", "")
-          fruitName = base .. "-" .. base
-        end
-        replicated.Remotes.CommF_:InvokeServer("StoreFruit", fruitName)
-        task.wait(0.1) -- tránh spam remote
+  local now = os.clock()
+  local bp = plr.Backpack
+  if not bp then return end
+  -- quét cả Backpack lẫn Character (trái cây đang cầm tay cũng store được)
+  local tools = {}
+  for _, t in ipairs(bp:GetChildren()) do
+    if IsFruitTool(t) then table.insert(tools, t) end
+  end
+  local char = plr.Character
+  if char then
+    for _, t in ipairs(char:GetChildren()) do
+      if IsFruitTool(t) and not table.find(tools, t) then
+        table.insert(tools, t)
       end
-    end)
+    end
+  end
+  for _, tool in ipairs(tools) do
+    local key = GetFruitStoreKey(tool)
+    if key and tool.Parent then
+      local last = _G.PT_StoredFruits[key]
+      if (not last) or (now - last) >= FRUIT_STORE_COOLDOWN then
+        pcall(function()
+          replicated.Remotes.CommF_:InvokeServer("StoreFruit", key)
+        end)
+        _G.PT_StoredFruits[key] = now
+        task.wait(0.35) -- giãn cách giữa các lần invoke
+      end
+    end
   end
 end
 collectFruits = function(Succes)
@@ -10718,6 +10779,133 @@ pcall(function()
 end)
 
 
+-- ============================================================
+-- FIX: Auto Random Fruit không chạy trên bản Blox Fruits mới.
+--  Lỗi chính: _tp() chỉ tween cái block ẩn "Rip_Indra" — nhân vật
+--  chỉ bám theo khi shouldTween = true, mà _G.Random_Auto không nằm
+--  trong danh sách shouldTween (xem vòng lặp ở đầu script). Kết quả:
+--  người chơi không bao giờ tới dealer -> server từ chối Buy vì
+--  ngoài phạm vi. Thay bằng teleport trực tiếp + chờ XÁC NHẬN tới nơi.
+--  Lỗi phụ: dealer bản mới có thể không nằm trong replicated.NPCs
+--  -> quét thêm workspace.NPCs và toàn bộ descendant, có toạ độ dự
+--  phòng theo từng sea. Chống spam: chỉ Buy khi đứng gần (<=30),
+--  cooldown 1.5s, kiểm tra Beli, và xác nhận mua thành công bằng
+--  cách đếm trái cây trong inventory trước/sau.
+-- ============================================================
+local RandomFruitCooldown = 0
+
+-- Tìm NPC dealer random fruit: ưu tiên Zioles (Sea 2/3), dự phòng
+-- Cousin (Sea 1). Quét workspace.NPCs -> replicated.NPCs -> toàn bộ
+-- workspace (đề phòng bản mới đổi nơi chứa NPC).
+local function FindRandomDealer()
+  local found = { zioles = nil, other = nil }
+  local function scan(container)
+    if not container then return end
+    for _, v in ipairs(container:GetChildren()) do
+      local n = v.Name
+      if n == "Zioles" or n == "Cousin" or n == "Blox Fruit Dealer Cousin" then
+        local root = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+        if root then
+          if n == "Zioles" and not found.zioles then
+            found.zioles = { root = root, name = n }
+          elseif n ~= "Zioles" and not found.other then
+            found.other = { root = root, name = n }
+          end
+        end
+      end
+    end
+  end
+  pcall(function() scan(workspace:FindFirstChild("NPCs")) end)
+  pcall(function() scan(replicated:FindFirstChild("NPCs")) end)
+  if not found.zioles and not found.other then
+    pcall(function()
+      for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("Model") and (v.Name == "Zioles" or v.Name == "Cousin" or v.Name == "Blox Fruit Dealer Cousin") then
+          local root = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+          if root then
+            if v.Name == "Zioles" and not found.zioles then
+              found.zioles = { root = root, name = v.Name }
+            elseif v.Name ~= "Zioles" and not found.other then
+              found.other = { root = root, name = v.Name }
+            end
+          end
+        end
+      end
+    end)
+  end
+  if found.zioles then return found.zioles end
+  return found.other
+end
+
+-- Toạ độ dự phòng khi không tìm thấy model NPC (mỗi sea một dealer)
+local function GetRandomDealerFallbackCFrame()
+  if World1 then
+    -- Jungle - "Cousin" (Blox Fruits Gacha Sea 1)
+    return CFrame.new(-1618.91016, 36.2737, 148.587)
+  elseif World2 then
+    -- Café, Kingdom of Rose - "Zioles" (Blox Fruits Gacha Sea 2)
+    return CFrame.new(-382.917, 73.289, 291.402)
+  elseif World3 then
+    -- Mansion Sea 3 - "Zioles" (Blox Fruits Gacha Sea 3)
+    return CFrame.new(-12455.3, 375.2, -7552.7)
+  end
+  return nil
+end
+
+-- Di chuyển thẳng tới dealer và chờ xác nhận tới nơi (timeout 8s).
+local function GoToRandomDealer(cf)
+  if not cf then return false end
+  local char = plr.Character
+  local hrp = char and char:FindFirstChild("HumanoidRootPart")
+  if not hrp then return false end
+  local target = typeof(cf) == "CFrame" and cf or CFrame.new(cf)
+  pcall(function() -- noclip tạm để không kẹt địa hình khi tele
+    for _, part in ipairs(char:GetDescendants()) do
+      if part:IsA("BasePart") then part.CanCollide = false end
+    end
+  end)
+  hrp.CFrame = target * CFrame.new(0, 3, 0)
+  local start = os.clock()
+  repeat
+    task.wait(0.15)
+    local h = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    if h and (h.Position - target.Position).Magnitude <= 30 then
+      return true
+    end
+  until (os.clock() - start) > 8
+  pcall(function() -- ép lần cuối
+    local h = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    if h then h.CFrame = target * CFrame.new(0, 3, 0) end
+  end)
+  return false
+end
+
+-- Đếm số trái cây đang giữ (Backpack + Character) để phát hiện mua thành công
+local function CountHeldFruits()
+  local n = 0
+  for _, t in ipairs(plr.Backpack:GetChildren()) do
+    if t:IsA("Tool") and (t:FindFirstChild("EatRemote", true) or tostring(t.Name):find("Fruit")) then
+      n = n + 1
+    end
+  end
+  local char = plr.Character
+  if char then
+    for _, t in ipairs(char:GetChildren()) do
+      if t:IsA("Tool") and (t:FindFirstChild("EatRemote", true) or tostring(t.Name):find("Fruit")) then
+        n = n + 1
+      end
+    end
+  end
+  return n
+end
+
+local function GetBeli()
+  local ok, v = pcall(function()
+    return plr.Data and plr.Data.Beli and plr.Data.Beli.Value
+  end)
+  return ok and tonumber(v) or 0
+end
+
 RandomFF = Tabs.Raids:AddToggle({
 Name = "Auto Random Fruit", 
 Description = "", 
@@ -10726,37 +10914,60 @@ Callback = function(Value)
   _G.Random_Auto = Value
 end})
 spawn(function()
-  while wait(Sec) do
-   	pcall(function()
-      if _G.Random_Auto then
-        -- Tìm dealer random fruit: Zioles (Sea 2/3) hoặc Cousin (Sea 1), bay tới rồi mua
-        local dealerRoot, dealerKey = nil, nil
-        pcall(function() -- quét NPC an toàn, không làm hỏng bước mua
-        for _, _v in pairs(replicated.NPCs:GetChildren()) do
-          local _n = _v.Name
-          if _n == "Zioles" or _n == "Cousin" or _n == "Blox Fruit Dealer Cousin" then
-            if _n == "Zioles" then
-              dealerRoot = _v:FindFirstChild("HumanoidRootPart"); dealerKey = _n; break
-            elseif not dealerKey then
-              dealerRoot = _v:FindFirstChild("HumanoidRootPart"); dealerKey = _n
-            end
-          end
-        end
-        end) -- kết thúc quét NPC an toàn
-        local _hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-        if dealerRoot and _hrp and (dealerRoot.Position - _hrp.Position).Magnitude > 40 then
-          _tp(dealerRoot.CFrame)
-          task.wait(0.3)
-        end
-        if dealerKey then
+  while task.wait(0.5) do
+    if not _G.Random_Auto then
+      RandomFruitCooldown = 0
+      continue
+    end
+    pcall(function()
+      local now = os.clock()
+      if now - RandomFruitCooldown < 1.5 then return end -- hồi chiêu chống spam
+
+      local dealer = FindRandomDealer()
+      local dealerRoot = dealer and dealer.root
+      local dealerKey = dealer and dealer.name
+      local targetCF = dealerRoot and dealerRoot.CFrame
+      if not targetCF then
+        targetCF = GetRandomDealerFallbackCFrame()
+        dealerKey = dealerKey or (World1 and "Cousin" or "Zioles")
+      end
+      if not targetCF then return end
+
+      local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+      local inRange = hrp and (hrp.Position - targetCF.Position).Magnitude <= 30
+      if not inRange then
+        -- tới dealer trước; vòng lặp sau sẽ mua khi đã đứng gần
+        GoToRandomDealer(targetCF)
+        return
+      end
+
+      -- kiểm tra tiền trước khi mua (random fruit từ ~25k Beli tuỳ level)
+      local beli = GetBeli()
+      if beli <= 0 then beli = math.huge end -- Data chưa load -> vẫn thử mua
+      if beli < 30000 then
+        RandomFruitCooldown = now
+        return
+      end
+
+      local before = CountHeldFruits()
+      if dealerKey then
+        pcall(function()
           replicated.Remotes.CommF_:InvokeServer(dealerKey, "Buy")
-        else
+        end)
+      else
+        pcall(function()
           if not replicated.Remotes.CommF_:InvokeServer("Zioles", "Buy") then
             replicated.Remotes.CommF_:InvokeServer("Cousin", "Buy")
           end
-        end
-      end 
+        end)
+      end
+      RandomFruitCooldown = now
 
+      -- xác nhận thành công: Beli giảm hoặc có trái cây mới xuất hiện
+      task.wait(0.8)
+      if CountHeldFruits() > before or GetBeli() < beli then
+        RandomFruitCooldown = now - 0.6 -- mua thành công -> chờ lâu hơn
+      end
     end)
   end
 end)
